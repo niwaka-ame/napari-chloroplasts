@@ -240,6 +240,17 @@ class VeinViewerWidget(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder with LIF files")
         if folder:
             self.folder_lbl.setText(folder)
+            max_len = 50
+            if len(folder) > max_len:
+                # Keep the first 20 chars, add "...", and keep the last 27 chars
+                display_text = folder[:20] + "..." + folder[-27:]
+            else:
+                display_text = folder
+
+            self.folder_lbl.setText(display_text)
+            self.folder_lbl.setToolTip(
+                folder
+            )  # Allows user to hover and see the full path
             self.load_btn.setEnabled(True)
 
     def load_data(self):
