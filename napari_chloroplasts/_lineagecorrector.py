@@ -758,6 +758,7 @@ class LineageCorrectorWidget(QWidget):
             self.unsaved_changes = True
 
         edit_layer.events.data.connect(on_data_change)
+        edit_layer.events.paint.connect(on_data_change)
 
         cell_bound_2d = find_boundaries(self.target_cell_bool, mode="outer")
         cell_contour_3d = np.zeros_like(crop_chlo_raw, dtype=np.uint8)
