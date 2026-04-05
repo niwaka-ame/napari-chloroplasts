@@ -730,7 +730,7 @@ class LineageCorrectorWidget(QWidget):
         self.viewer.add_image(
             crop_chlo_raw,
             name="Raw Chlo (Cropped)",
-            colormap="green",
+            colormap="red",
             blending="additive",
         )
 
@@ -746,7 +746,7 @@ class LineageCorrectorWidget(QWidget):
             self.orig_active_mask_bool = display_data > 0
 
         edit_layer = self.viewer.add_labels(
-            display_data, name="Editable Chlo Masks", opacity=0.5
+            display_data, name="Editable Chlo Masks", opacity=0.7
         )
 
         # Attach the custom mouse hook to our new layer
