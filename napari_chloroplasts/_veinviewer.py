@@ -215,8 +215,8 @@ class VeinViewerWidget(QWidget):
         self.gpu_cb.setChecked(False)  # Set to True if you want it on by default
 
         self.niter_spin = QSpinBox()
-        self.niter_spin.setRange(0, 1000)
-        self.niter_spin.setValue(0)
+        self.niter_spin.setRange(0, 30)
+        self.niter_spin.setValue(10)
 
         # --- NEW: Core Selection ---
         self.cores_spin = QSpinBox()
