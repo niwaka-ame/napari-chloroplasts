@@ -320,7 +320,7 @@ class LineageCorrectorWidget(QWidget):
             self.base_folder = Path(folder)
 
             # 2. Create a FAKE, truncated path just for the UI
-            max_len = 50
+            max_len = 30
             if len(folder) > max_len:
                 display_text = folder[:20] + "..." + folder[-27:]
             else:

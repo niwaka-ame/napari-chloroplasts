@@ -131,7 +131,7 @@ class CellSelectorWidget(QWidget):
             self.base_folder = Path(folder)
 
             # 2. Create a truncated path for the UI that respects folder names
-            max_len = 50
+            max_len = 30
             if len(folder) > max_len:
                 parts = self.base_folder.parts
                 if len(parts) > 3:
