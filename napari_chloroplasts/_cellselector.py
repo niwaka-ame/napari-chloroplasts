@@ -366,11 +366,3 @@ class CellSelectorWidget(QWidget):
         tifffile.imwrite(wall_path, wall_layer.data.astype(np.uint8), imagej=True)
 
         QMessageBox.information(self, "Saved", f"Saved 2D cells mask to {out_dir}")
-
-
-# --- Main Execution ---
-if __name__ == "__main__":
-    viewer = napari.Viewer(title="Plant Vein - Cell Selector")
-    plugin_widget = CellSelectorWidget(viewer)
-    viewer.window.add_dock_widget(plugin_widget, area="right", name="Cell Selector")
-    napari.run()

@@ -786,11 +786,3 @@ class LineageCorrectorWidget(QWidget):
         QMessageBox.information(
             self, "Saved", f"Corrected 3D masks saved to:\n{out_path}"
         )
-
-
-# --- Main Execution ---
-if __name__ == "__main__":
-    viewer = napari.Viewer(title="Lineage Corrector V4")
-    plugin_widget = LineageCorrectorWidget(viewer)
-    viewer.window.add_dock_widget(plugin_widget, area="right", name="Lineage Corrector")
-    napari.run()

@@ -489,11 +489,3 @@ class VeinViewerWidget(QWidget):
         self.seg_folder_btn.setEnabled(True)
         self.seg_folder_btn.setText("Segment Current Folder")
         QMessageBox.information(self, "Done", "Finished segmenting entire folder.")
-
-
-# --- Main Execution ---
-if __name__ == "__main__":
-    viewer = napari.Viewer(title="Plant Vein LIF Viewer")
-    plugin_widget = VeinViewerWidget(viewer)
-    viewer.window.add_dock_widget(plugin_widget, area="right", name="Vein Navigator")
-    napari.run()
