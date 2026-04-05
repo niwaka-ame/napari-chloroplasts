@@ -124,6 +124,7 @@ class LineageCorrectorWidget(QWidget):
         folder_layout = QHBoxLayout()
         self.folder_btn = QPushButton("Choose Folder")
         self.folder_lbl = QLabel("No folder selected")
+        self.folder_lbl.setStyleSheet("color: gray; font-style: italic;")
         folder_layout.addWidget(self.folder_btn)
         folder_layout.addWidget(self.folder_lbl)
         self.layout.addLayout(folder_layout)
@@ -315,31 +316,36 @@ class LineageCorrectorWidget(QWidget):
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder with LIF files")
         if folder:
+            # 1. Save the REAL, full path to the internal variable
             self.base_folder = Path(folder)
-            self.folder_lbl.setText(folder)
+
+            # 2. Create a FAKE, truncated path just for the UI
             max_len = 50
             if len(folder) > max_len:
-                # Keep the first 20 chars, add "...", and keep the last 27 chars
                 display_text = folder[:20] + "..." + folder[-27:]
             else:
                 display_text = folder
 
+            # 3. Apply the fake text to the label, but keep the real path in the tooltip
             self.folder_lbl.setText(display_text)
-            self.folder_lbl.setToolTip(
-                folder
-            )  # Allows user to hover and see the full path
+            self.folder_lbl.setToolTip(folder)
+
             self.load_btn.setEnabled(True)
 
     def load_data(self):
-        if not self.base_folder:
+        # Added .is_dir() to ensure stability based on previous edits
+        if not self.base_folder or not self.base_folder.is_dir():
             return
         self.lif_files.clear()
         self.lif_combo.blockSignals(True)
         self.lif_combo.clear()
+
         for p in sorted(self.base_folder.glob("*.lif")):
             self.lif_files[p.name] = p
+
         self.lif_combo.blockSignals(False)
         self.lif_combo.addItems(list(self.lif_files.keys()))
+
         if self.lif_combo.count() > 0:
             self.last_lif_idx = self.lif_combo.currentIndex()
             self.update_lif()

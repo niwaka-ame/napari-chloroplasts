@@ -76,7 +76,7 @@ def seg_chlo(image_data, save_dir=None, filename_prefix="", use_gpu=False, niter
         "resample": True,  # whether or not to run dynamics on rescaled grid or original grid
         "verbose": False,  # turn on if you want to see more output
         "tile": False,  # average the outputs from flipped (augmented) images; slower, usually not needed
-        "niter": 20,  # default None lets Omnipose calculate # of Euler iterations (usually <20) but you can tune it for over/under segmentation
+        "niter": niter,  # default None lets Omnipose calculate # of Euler iterations (usually <20) but you can tune it for over/under segmentation
         "augment": False,  # Can optionally rotate the image and average network outputs, usually not needed
         "affinity_seg": False,  # new feature, stay tuned...
     }
@@ -111,6 +111,9 @@ class VeinViewerWidget(QWidget):
 
         self.current_wall_data = None
         self.current_chlo_data = None
+        
+        # --- NEW: Added base_folder initialization ---
+        self.base_folder = None
 
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
@@ -239,24 +242,28 @@ class VeinViewerWidget(QWidget):
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder with LIF files")
         if folder:
-            self.folder_lbl.setText(folder)
+            # 1. Save the REAL, full path to the internal variable
+            self.base_folder = Path(folder)
+
+            # 2. Create a FAKE, truncated path just for the UI
             max_len = 50
             if len(folder) > max_len:
-                # Keep the first 20 chars, add "...", and keep the last 27 chars
                 display_text = folder[:20] + "..." + folder[-27:]
             else:
                 display_text = folder
 
+            # 3. Apply the fake text to the label, but keep the real path in the tooltip
             self.folder_lbl.setText(display_text)
-            self.folder_lbl.setToolTip(
-                folder
-            )  # Allows user to hover and see the full path
+            self.folder_lbl.setToolTip(folder)
+
             self.load_btn.setEnabled(True)
 
     def load_data(self):
-        folder_path = Path(self.folder_lbl.text())
-        if not folder_path.is_dir():
+        # --- FIXED: Use the internal base_folder path ---
+        if not self.base_folder or not self.base_folder.is_dir():
             return
+            
+        folder_path = self.base_folder
 
         self.lif_files.clear()
         self.lif_combo.blockSignals(True)
@@ -368,11 +375,14 @@ class VeinViewerWidget(QWidget):
 
     # --- SEGMENTATION LOGIC ---
     def get_output_dir(self):
-        base_folder = Path(self.folder_lbl.text())
+        # --- FIXED: Use the internal base_folder path ---
+        base_folder = self.base_folder
         subfolder_name = self.out_dir_edit.text().strip()
         if not subfolder_name:
             subfolder_name = "analysis"
 
+        # Note: If base_folder is None here (which shouldn't happen unless called prematurely),
+        # this will throw an error, so the earlier checks in methods using this are vital.
         out_dir = base_folder / subfolder_name
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir

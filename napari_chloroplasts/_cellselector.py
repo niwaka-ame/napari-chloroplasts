@@ -127,19 +127,29 @@ class CellSelectorWidget(QWidget):
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder with LIF files")
         if folder:
+            # 1. Save the REAL, full path to the internal variable
             self.base_folder = Path(folder)
-            self.folder_lbl.setText(folder)
+
+            # 2. Create a truncated path for the UI that respects folder names
             max_len = 50
             if len(folder) > max_len:
-                # Keep the first 20 chars, add "...", and keep the last 27 chars
-                display_text = folder[:20] + "..." + folder[-27:]
+                parts = self.base_folder.parts
+                if len(parts) > 3:
+                    # Format: Root.../ParentFolder/TargetFolder
+                    display_text = f"{parts[0]}.../{parts[-2]}/{parts[-1]}"
+                    # Fallback string slice if the last two folders are incredibly long
+                    if len(display_text) > max_len:
+                        display_text = folder[:20] + "..." + folder[-27:]
+                else:
+                    # Fallback for short depths with extremely long names
+                    display_text = folder[:20] + "..." + folder[-27:]
             else:
                 display_text = folder
 
+            # 3. Apply the fake text to the label, but keep the real path in the tooltip
             self.folder_lbl.setText(display_text)
-            self.folder_lbl.setToolTip(
-                folder
-            )  # Allows user to hover and see the full path
+            self.folder_lbl.setToolTip(folder)
+
             self.load_btn.setEnabled(True)
 
     def load_data(self):
