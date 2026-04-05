@@ -139,10 +139,10 @@ class CellSelectorWidget(QWidget):
                     display_text = f"{parts[0]}.../{parts[-2]}/{parts[-1]}"
                     # Fallback string slice if the last two folders are incredibly long
                     if len(display_text) > max_len:
-                        display_text = folder[:20] + "..." + folder[-27:]
+                        display_text = folder[:10] + "..." + folder[-17:]
                 else:
                     # Fallback for short depths with extremely long names
-                    display_text = folder[:20] + "..." + folder[-27:]
+                    display_text = folder[:10] + "..." + folder[-17:]
             else:
                 display_text = folder
 
