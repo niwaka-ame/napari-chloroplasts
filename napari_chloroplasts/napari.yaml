@@ -1,0 +1,22 @@
+name: napari-chloroplasts
+contributions:
+  commands:
+    - id: napari-chloroplasts.VeinViewerWidget
+      title: view Z-stack data of veins
+      python_name: napari_chloroplasts._veinviewer:VeinViewerWidget
+    - id: napari-chloroplasts.CellSelectorWidget
+      title: select cells of interest for each vein
+      python_name: napari_chloroplasts._cellselector:CellSelectorWidget
+    - id: napari-chloroplasts.LineageCorrectorWidget
+      title: correct Z-stack lineages
+      python_name: napari_chloroplasts._lineagecorrector:LineageCorrectorWidget
+  widgets:
+    - command: napari-chloroplasts.VeinViewerWidget
+      display_name: VeinViewer
+      autogenerate: False
+    - command: napari-chloroplasts.CellSelectorWidget
+      display_name: CellSelector
+      autogenerate: False
+    - command: napari-chloroplasts.LineageCorrectorWidget
+      display_name: LineageCorrector
+      autogenerate: False
