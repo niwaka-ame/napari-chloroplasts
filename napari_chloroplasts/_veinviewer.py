@@ -1,4 +1,5 @@
-import napari
+import multiprocessing
+import concurrent.futures
 import numpy as np
 from pathlib import Path
 from readlif.reader import LifFile
@@ -27,6 +28,7 @@ from omnipose.gpu import use_gpu
 import cellpose_omni
 from cellpose_omni import models
 from cellpose_omni.models import MODEL_NAMES
+import napari
 
 
 # ==============================================================================
@@ -45,8 +47,8 @@ def seg_wall(image_data, save_dir=None, filename_prefix="", gamma=0.5, otsu_mult
         edge_sato = morphology.skeletonize(edge_sato)
         edge_sato = prune_branches(edge_sato, iterations=5)
         satos.append(edge_sato)
-        mask_3d = np.stack(satos, axis=0)
-        mask_3d = mask_3d.astype(np.uint8) * 255
+    mask_3d = np.stack(satos, axis=0)
+    mask_3d = mask_3d.astype(np.uint8) * 255
     if save_dir:
         # 1. Create the specific 'walls' subfolder inside your analysis folder
         wall_dir = Path(save_dir) / "walls"
@@ -61,7 +63,9 @@ def seg_wall(image_data, save_dir=None, filename_prefix="", gamma=0.5, otsu_mult
     return mask_3d
 
 
-def seg_chlo(image_data, save_dir=None, filename_prefix="", use_gpu=False, niter=20):
+def seg_chlo(
+    image_data, save_dir=None, filename_prefix="", use_gpu=False, niter=20, n_cores=1
+):
     model_name = "nuclei"
     model = models.CellposeModel(gpu=use_gpu, model_type=model_name)
     # define parameters
@@ -80,11 +84,26 @@ def seg_chlo(image_data, save_dir=None, filename_prefix="", use_gpu=False, niter
         "augment": False,  # Can optionally rotate the image and average network outputs, usually not needed
         "affinity_seg": False,  # new feature, stay tuned...
     }
+
     all_masks = []
-    for j in range(len(image_data)):
-        masks, flows, styles = model.eval(image_data[j, :, :], **params)
-        all_masks.append(masks)
+
+    # Helper function for parallel execution
+    def process_slice(img_slice):
+        masks, flows, styles = model.eval(img_slice, **params)
+        return masks
+
+    # Parallelize only if GPU is not used and user selected more than 1 core
+    if not use_gpu and n_cores > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_cores) as executor:
+            # Map the helper function over each slice in the 3D stack
+            all_masks = list(executor.map(process_slice, image_data))
+    else:
+        for j in range(len(image_data)):
+            masks, flows, styles = model.eval(image_data[j, :, :], **params)
+            all_masks.append(masks)
+
     mask_3d = np.stack(all_masks, axis=0)
+
     if save_dir:
         # 1. Create the specific 'chlos' subfolder inside your analysis folder
         chlo_dir = Path(save_dir) / "chlos"
@@ -111,7 +130,7 @@ class VeinViewerWidget(QWidget):
 
         self.current_wall_data = None
         self.current_chlo_data = None
-        
+
         # --- NEW: Added base_folder initialization ---
         self.base_folder = None
 
@@ -197,10 +216,23 @@ class VeinViewerWidget(QWidget):
 
         self.niter_spin = QSpinBox()
         self.niter_spin.setRange(0, 1000)
-        self.niter_spin.setValue(20)
+        self.niter_spin.setValue(0)
+
+        # --- NEW: Core Selection ---
+        self.cores_spin = QSpinBox()
+        total_cores = multiprocessing.cpu_count()
+        self.cores_spin.setRange(1, total_cores)
+        # Default to total cores - 2 (with a minimum of 1)
+        self.cores_spin.setValue(max(1, total_cores - 2))
+
+        # Disable CPU core selection if GPU is checked
+        self.gpu_cb.stateChanged.connect(
+            lambda state: self.cores_spin.setEnabled(not bool(state))
+        )
 
         chlo_layout.addRow("", self.gpu_cb)
         chlo_layout.addRow("niter (0 = False):", self.niter_spin)
+        chlo_layout.addRow("CPU Cores:", self.cores_spin)
         self.chlo_group.setLayout(chlo_layout)
         self.layout.addWidget(self.chlo_group)
 
@@ -246,7 +278,7 @@ class VeinViewerWidget(QWidget):
             self.base_folder = Path(folder)
 
             # 2. Create a FAKE, truncated path just for the UI
-            max_len = 50
+            max_len = 30
             if len(folder) > max_len:
                 display_text = folder[:20] + "..." + folder[-27:]
             else:
@@ -262,7 +294,7 @@ class VeinViewerWidget(QWidget):
         # --- FIXED: Use the internal base_folder path ---
         if not self.base_folder or not self.base_folder.is_dir():
             return
-            
+
         folder_path = self.base_folder
 
         self.lif_files.clear()
@@ -402,6 +434,7 @@ class VeinViewerWidget(QWidget):
             "otsu_mult": self.otsu_spin.value(),
             "use_gpu": gpu_param,
             "niter": niter_val if niter_val > 0 else False,
+            "n_cores": self.cores_spin.value(),
         }
 
     def test_current_vein(self):
@@ -421,6 +454,7 @@ class VeinViewerWidget(QWidget):
                 filename_prefix=prefix,
                 use_gpu=params["use_gpu"],
                 niter=params["niter"],
+                n_cores=params["n_cores"],
             )
             self.viewer.add_labels(chlo_mask, name="Chlo Mask (Tested)", opacity=0.5)
 
@@ -476,6 +510,7 @@ class VeinViewerWidget(QWidget):
                     filename_prefix=prefix,
                     use_gpu=params["use_gpu"],
                     niter=params["niter"],
+                    n_cores=params["n_cores"],
                 )
 
     def segment_current_lif(self):
