@@ -489,8 +489,19 @@ class LineageCorrectorWidget(QWidget):
     # --- Editing Interactions ---
 
     def save_history(self, layer):
-        """Saves a snapshot of the mask array for the Undo button."""
-        self.undo_stack.append(layer.data.copy())
+        """Saves a snapshot of the mask array and its context for the Undo button."""
+        self.undo_stack.append(
+            {
+                "layer_data": layer.data.copy(),
+                "master_mask": self.current_crop_chlo_mask.copy(),
+                "orig_bool": (
+                    self.orig_active_mask_bool.copy()
+                    if self.orig_active_mask_bool is not None
+                    else None
+                ),
+                "is_all_mode": self.rad_all.isChecked(),
+            }
+        )
         if len(self.undo_stack) > 15:  # Keep memory clean
             self.undo_stack.pop(0)
 
@@ -498,11 +509,35 @@ class LineageCorrectorWidget(QWidget):
         if not self.undo_stack:
             self.global_status_lbl.setText("Nothing to undo.")
             return
+
         if "Editable Chlo Masks" in self.viewer.layers:
             layer = self.viewer.layers["Editable Chlo Masks"]
-            layer.data = self.undo_stack.pop()
+            state = self.undo_stack.pop()
+
+            # 1. Restore the background master mask to prevent wiping hidden masks
+            self.current_crop_chlo_mask = state["master_mask"]
+
+            # 2. Restore the correct boolean footprint mapping
+            self.orig_active_mask_bool = state["orig_bool"]
+
+            # 3. Sync the UI visibility radio buttons
+            # (We block signals so checking a button doesn't prematurely trigger an apply_edits_to_master)
+            self.rad_all.blockSignals(True)
+            self.rad_unreliable.blockSignals(True)
+            if state["is_all_mode"]:
+                self.rad_all.setChecked(True)
+            else:
+                self.rad_unreliable.setChecked(True)
+            self.rad_all.blockSignals(False)
+            self.rad_unreliable.blockSignals(False)
+
+            # 4. Restore the visual napari layer array
+            layer.data = state["layer_data"].copy()
             self.merge_source_id = None
-            self.global_status_lbl.setText("Undo successful.")
+
+            self.global_status_lbl.setText(
+                "Undo successful. (Press 'Update Graph' to refresh peaks)"
+            )
 
     def revert_to_original(self):
         if self.cell_combo.currentIndex() < 0:
@@ -605,7 +640,8 @@ class LineageCorrectorWidget(QWidget):
 
         # Post-Erase Auto-Split Logic
         if is_erase and self.undo_stack:
-            prev_data = self.undo_stack[-1]
+            last_state = self.undo_stack[-1]
+            prev_data = last_state["layer_data"]  # Extract the actual NumPy array!
             curr_data = layer.data
 
             # Find the pixels that were erased and identify which masks they belonged to
