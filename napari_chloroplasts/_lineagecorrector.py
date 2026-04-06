@@ -572,12 +572,18 @@ class LineageCorrectorWidget(QWidget):
                     else:
                         if self.merge_source_id != clicked_id:
                             self.save_history(layer)
-                            # Overwrite target mask with source ID
+
+                            # Overwrite target mask with source ID ONLY on the active Z-stack
                             new_data = layer.data.copy()
-                            new_data[new_data == clicked_id] = self.merge_source_id
+                            z_idx = coords[0]  # The Z-slice where the user clicked
+
+                            # Restrict the reassignment to only the current Z-slice
+                            slice_data = new_data[z_idx]
+                            slice_data[slice_data == clicked_id] = self.merge_source_id
+
                             layer.data = new_data
                             self.global_status_lbl.setText(
-                                f"Merged ID {clicked_id} into {self.merge_source_id}."
+                                f"Merged ID {clicked_id} into {self.merge_source_id} on Z-slice {z_idx}."
                             )
                         self.merge_source_id = None  # Reset
                         self.mask_modified = True
