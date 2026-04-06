@@ -10,7 +10,8 @@ conda activate chlo
 pip install omnipose
 pip install 'napari[all]'
 # clone this repository and install
-mkdir <where/you/want/this/repo/to/be>
+mkdir <where/you/want/this/repo/to/be> # e.g. ~/code/
+cd <where/you/want/this/repo/to/be>
 git clone git@github.com:niwaka-ame/napari-chloroplasts.git
 cd <path/to/this/repo>
 pip install -e .
