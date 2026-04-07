@@ -644,35 +644,45 @@ class LineageCorrectorWidget(QWidget):
             prev_data = last_state["layer_data"]  # Extract the actual NumPy array!
             curr_data = layer.data
 
-            # Find the pixels that were erased and identify which masks they belonged to
+            # Find the pixels that were erased
             changed = prev_data != curr_data
-            touched_ids = np.unique(prev_data[changed])
+
+            # Identify exactly which Z-slices were affected by the erase stroke
+            changed_z_indices = np.unique(np.where(changed)[0])
 
             new_data = curr_data.copy()
             split_occurred = False
 
-            for tid in touched_ids:
-                if tid == 0:
-                    continue
-                bin_mask = curr_data == tid
-                if not np.any(bin_mask):
-                    continue
+            # Process ONLY the Z-slices where the erase happened
+            for z_idx in changed_z_indices:
+                # Find which IDs were touched on this specific slice
+                touched_ids = np.unique(prev_data[z_idx][changed[z_idx]])
 
-                # Check for disconnected components (connectivity=1 enforces strict pixel sharing)
-                labeled_components, num_features = sk_label(
-                    bin_mask, return_num=True, connectivity=1
-                )
+                for tid in touched_ids:
+                    if tid == 0:
+                        continue
 
-                if num_features > 1:
-                    split_occurred = True
-                    props = regionprops(labeled_components)
-                    # Sort components by volume so the largest piece keeps the original ID
-                    props.sort(key=lambda x: x.area, reverse=True)
+                    # Isolate the mask to ONLY this Z-slice
+                    bin_mask = curr_data[z_idx] == tid
+                    if not np.any(bin_mask):
+                        continue
 
-                    # Assign new unique IDs to the severed smaller pieces
-                    for p in props[1:]:
-                        new_id = max(self.full_chlo_mask.max(), new_data.max()) + 1
-                        new_data[labeled_components == p.label] = new_id
+                    # Check for disconnected components in 2D (connectivity=1 for 4-way pixels)
+                    labeled_components, num_features = sk_label(
+                        bin_mask, return_num=True, connectivity=1
+                    )
+
+                    if num_features > 1:
+                        split_occurred = True
+                        props = regionprops(labeled_components)
+                        # Sort components by area so the largest piece keeps the original ID
+                        props.sort(key=lambda x: x.area, reverse=True)
+
+                        # Assign new unique IDs to the severed smaller pieces on this slice
+                        for p in props[1:]:
+                            new_id = max(self.full_chlo_mask.max(), new_data.max()) + 1
+                            # Reassign ONLY on the active Z-slice
+                            new_data[z_idx][labeled_components == p.label] = new_id
 
             if split_occurred:
                 layer.data = new_data
