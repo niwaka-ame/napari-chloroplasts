@@ -64,8 +64,18 @@ def seg_wall(image_data, save_dir=None, filename_prefix="", gamma=0.5, otsu_mult
 
 
 def seg_chlo(
-    image_data, save_dir=None, filename_prefix="", use_gpu=False, niter=20, n_cores=1
+    image_data,
+    save_dir=None,
+    filename_prefix="",
+    use_gpu=False,
+    niter=20,
+    n_cores=1,
+    gamma=1.0,
 ):
+    # Apply gamma adjustment before processing
+    if gamma != 1.0:
+        image_data = exposure.adjust_gamma(image_data, gamma=gamma)
+
     model_name = "nuclei"
     model = models.CellposeModel(gpu=use_gpu, model_type=model_name)
     # define parameters
@@ -131,7 +141,7 @@ class VeinViewerWidget(QWidget):
         self.current_wall_data = None
         self.current_chlo_data = None
 
-        # --- NEW: Added base_folder initialization ---
+        # --- Base folder initialization ---
         self.base_folder = None
 
         self.layout = QVBoxLayout()
@@ -188,7 +198,7 @@ class VeinViewerWidget(QWidget):
         self.load_masks_cb.setChecked(False)
         self.layout.addWidget(self.load_masks_cb)
 
-        # --- NEW: Wall Parameters Group ---
+        # --- Wall Parameters Group ---
         self.wall_group = QGroupBox("Wall Parameters")
         wall_layout = QFormLayout()
 
@@ -196,6 +206,8 @@ class VeinViewerWidget(QWidget):
         self.gamma_spin.setRange(0.1, 5.0)
         self.gamma_spin.setSingleStep(0.1)
         self.gamma_spin.setValue(0.5)
+        # Connect wall gamma spinbox to live preview
+        self.gamma_spin.valueChanged.connect(self.preview_wall_gamma)
 
         self.otsu_spin = QDoubleSpinBox()
         self.otsu_spin.setRange(0.1, 5.0)
@@ -207,9 +219,16 @@ class VeinViewerWidget(QWidget):
         self.wall_group.setLayout(wall_layout)
         self.layout.addWidget(self.wall_group)
 
-        # --- NEW: Chloroplast Parameters Group ---
+        # --- Chloroplast Parameters Group ---
         self.chlo_group = QGroupBox("Chloroplast Parameters (Omnipose)")
         chlo_layout = QFormLayout()
+
+        self.chlo_gamma_spin = QDoubleSpinBox()
+        self.chlo_gamma_spin.setRange(0.1, 5.0)
+        self.chlo_gamma_spin.setSingleStep(0.1)
+        self.chlo_gamma_spin.setValue(1.0)
+        # Connect chlo gamma spinbox to live preview
+        self.chlo_gamma_spin.valueChanged.connect(self.preview_chlo_gamma)
 
         self.gpu_cb = QCheckBox("Use GPU")
         self.gpu_cb.setChecked(False)  # Set to True if you want it on by default
@@ -218,7 +237,7 @@ class VeinViewerWidget(QWidget):
         self.niter_spin.setRange(0, 30)
         self.niter_spin.setValue(10)
 
-        # --- NEW: Core Selection ---
+        # --- Core Selection ---
         self.cores_spin = QSpinBox()
         total_cores = multiprocessing.cpu_count()
         self.cores_spin.setRange(1, total_cores)
@@ -230,6 +249,7 @@ class VeinViewerWidget(QWidget):
             lambda state: self.cores_spin.setEnabled(not bool(state))
         )
 
+        chlo_layout.addRow("Gamma:", self.chlo_gamma_spin)
         chlo_layout.addRow("", self.gpu_cb)
         chlo_layout.addRow("niter (0 = False):", self.niter_spin)
         chlo_layout.addRow("CPU Cores:", self.cores_spin)
@@ -265,6 +285,17 @@ class VeinViewerWidget(QWidget):
         self.seg_lif_btn.clicked.connect(self.segment_current_lif)
         self.seg_folder_btn.clicked.connect(self.segment_current_folder)
 
+    # --- Live Preview Methods ---
+    def preview_wall_gamma(self, value):
+        """Updates the napari layer gamma in real-time for visual testing."""
+        if "Cell Wall" in self.viewer.layers:
+            self.viewer.layers["Cell Wall"].gamma = value
+
+    def preview_chlo_gamma(self, value):
+        """Updates the napari layer gamma in real-time for visual testing."""
+        if "Chloroplast" in self.viewer.layers:
+            self.viewer.layers["Chloroplast"].gamma = value
+
     # --- Standard Interaction Logic ---
     def step_combo(self, combo: QComboBox, step: int):
         new_idx = combo.currentIndex() + step
@@ -291,7 +322,7 @@ class VeinViewerWidget(QWidget):
             self.load_btn.setEnabled(True)
 
     def load_data(self):
-        # --- FIXED: Use the internal base_folder path ---
+        # --- Use the internal base_folder path ---
         if not self.base_folder or not self.base_folder.is_dir():
             return
 
@@ -361,6 +392,9 @@ class VeinViewerWidget(QWidget):
             self.viewer.add_image(
                 ch_data[1], name="Chloroplast", colormap="green", blending="additive"
             )
+            # Sync to current spinbox value
+            self.viewer.layers["Chloroplast"].gamma = self.chlo_gamma_spin.value()
+
         if c_dim > 0:
             self.viewer.add_image(
                 ch_data[0],
@@ -369,6 +403,8 @@ class VeinViewerWidget(QWidget):
                 blending="additive",
                 opacity=0.6,
             )
+            # Sync to current spinbox value
+            self.viewer.layers["Cell Wall"].gamma = self.gamma_spin.value()
 
         self.viewer.reset_view()
 
@@ -407,7 +443,7 @@ class VeinViewerWidget(QWidget):
 
     # --- SEGMENTATION LOGIC ---
     def get_output_dir(self):
-        # --- FIXED: Use the internal base_folder path ---
+        # --- Use the internal base_folder path ---
         base_folder = self.base_folder
         subfolder_name = self.out_dir_edit.text().strip()
         if not subfolder_name:
@@ -419,7 +455,7 @@ class VeinViewerWidget(QWidget):
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir
 
-    # --- NEW: Helper method to retrieve parameters from UI ---
+    # --- Helper method to retrieve parameters from UI ---
     def get_seg_params(self):
         niter_val = self.niter_spin.value()
 
@@ -432,6 +468,7 @@ class VeinViewerWidget(QWidget):
         return {
             "gamma": self.gamma_spin.value(),
             "otsu_mult": self.otsu_spin.value(),
+            "chlo_gamma": self.chlo_gamma_spin.value(),
             "use_gpu": gpu_param,
             "niter": niter_val if niter_val > 0 else False,
             "n_cores": self.cores_spin.value(),
@@ -455,6 +492,7 @@ class VeinViewerWidget(QWidget):
                 use_gpu=params["use_gpu"],
                 niter=params["niter"],
                 n_cores=params["n_cores"],
+                gamma=params["chlo_gamma"],
             )
             self.viewer.add_labels(chlo_mask, name="Chlo Mask (Tested)", opacity=0.5)
 
@@ -511,6 +549,7 @@ class VeinViewerWidget(QWidget):
                     use_gpu=params["use_gpu"],
                     niter=params["niter"],
                     n_cores=params["n_cores"],
+                    gamma=params["chlo_gamma"],
                 )
 
     def segment_current_lif(self):
