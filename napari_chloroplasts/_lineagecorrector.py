@@ -992,17 +992,34 @@ class LineageCorrectorWidget(QWidget):
         save_path = export_dir / file_name
 
         rows = []
-        headers = [
-            "LIF_Name",
-            "Vein_ID",
-            "Cell_ID",
-            f"Cell_Area_{'um2' if use_microns else 'px'}",
-            f"Cell_Length_{'um' if use_microns else 'px'}",
-            f"Cell_Width_{'um' if use_microns else 'px'}",
-            "Num_Chloroplasts",
-            "Occupancy",
-            f"Chloroplast_Area(s)_{'um2' if use_microns else 'px'}",
-        ]
+
+        # --- Dynamic headers depending on row export mode ---
+        if export_chlo_rows:
+            headers = [
+                "LIF_Name",
+                "Vein_ID",
+                "Cell_ID",
+                f"Cell_Area_{'um2' if use_microns else 'px'}",
+                f"Cell_Length_{'um' if use_microns else 'px'}",
+                f"Cell_Width_{'um' if use_microns else 'px'}",
+                "Num_Chloroplasts",
+                "Occupancy",
+                "Chloroplast_ID",  # ID column
+                f"Chloroplast_Area_{'um2' if use_microns else 'px'}",
+            ]
+        else:
+            headers = [
+                "LIF_Name",
+                "Vein_ID",
+                "Cell_ID",
+                f"Cell_Area_{'um2' if use_microns else 'px'}",
+                f"Cell_Length_{'um' if use_microns else 'px'}",
+                f"Cell_Width_{'um' if use_microns else 'px'}",
+                "Num_Chloroplasts",
+                "Occupancy",
+                f"Chloroplast_Area(s)_{'um2' if use_microns else 'px'}",
+            ]
+
         rows.append(headers)
 
         self.global_status_lbl.setText(
@@ -1070,6 +1087,10 @@ class LineageCorrectorWidget(QWidget):
                 available_cells = available_cells[available_cells > 0]
 
                 for cell_id in available_cells:
+
+                    # --- NEW: Reset counter to 1 for EACH cell ---
+                    cell_chlo_counter = 1
+
                     props = regionprops(
                         (full_cell_mask_to_use == cell_id).astype(np.uint8)
                     )
@@ -1137,11 +1158,12 @@ class LineageCorrectorWidget(QWidget):
                                     c_wid_fmt,
                                     num_chlo,
                                     occ_fmt,
-                                    "",
+                                    "",  # Blank Chlo ID
+                                    "",  # Blank Chlo Area
                                 ]
                             )
                         else:
-                            # Add a separate row for each chloroplast
+                            # Add a separate row for each chloroplast and increment counter
                             for ch_area in out_ch_areas:
                                 rows.append(
                                     [
@@ -1153,9 +1175,11 @@ class LineageCorrectorWidget(QWidget):
                                         c_wid_fmt,
                                         num_chlo,
                                         occ_fmt,
+                                        cell_chlo_counter,  # Use the cell-specific counter
                                         f"{ch_area:.2f}" if use_microns else ch_area,
                                     ]
                                 )
+                                cell_chlo_counter += 1
                     else:
                         # Fallback to the original semicolon-separated list
                         ch_areas_str = (
