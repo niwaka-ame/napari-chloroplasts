@@ -2,6 +2,7 @@ import napari
 import numpy as np
 import tifffile
 import networkx as nx
+import csv
 from pathlib import Path
 from readlif.reader import LifFile
 from skimage.measure import regionprops, label as sk_label
@@ -17,6 +18,8 @@ from qtpy.QtWidgets import (
     QMessageBox,
     QRadioButton,
     QButtonGroup,
+    QCheckBox,
+    QApplication,
 )
 
 # --- USER PROVIDED LOGIC ---
@@ -223,6 +226,28 @@ class LineageCorrectorWidget(QWidget):
         self.btn_save_corrected = QPushButton("💾 Save Corrected Chlos (3D)")
         self.layout.addWidget(self.btn_save_corrected)
 
+        # 5. Export
+        self.layout.addWidget(QLabel("--- 5. Export ---"))
+
+        export_opt_layout = QHBoxLayout()
+        self.chk_resolved_only = QCheckBox("Resolved cells only")
+        self.chk_resolved_only.setChecked(True)
+        self.chk_microns = QCheckBox("Export in microns")
+        self.chk_microns.setChecked(True)
+        export_opt_layout.addWidget(self.chk_resolved_only)
+        export_opt_layout.addWidget(self.chk_microns)
+        self.layout.addLayout(export_opt_layout)
+
+        export_btn_layout = QHBoxLayout()
+        self.combo_export_scope = QComboBox()
+        self.combo_export_scope.addItems(
+            ["Current Vein", "Current LIF", "Entire Folder"]
+        )
+        self.btn_export_csv = QPushButton("Export to CSV")
+        export_btn_layout.addWidget(self.combo_export_scope)
+        export_btn_layout.addWidget(self.btn_export_csv)
+        self.layout.addLayout(export_btn_layout)
+
         self.layout.addStretch()
 
         # Connect Signals
@@ -251,6 +276,7 @@ class LineageCorrectorWidget(QWidget):
 
         self.btn_update_graph.clicked.connect(self.update_graph_action)
         self.btn_save_corrected.clicked.connect(self.save_corrected)
+        self.btn_export_csv.clicked.connect(self.export_data)
 
     # --- Navigation Safety Wrappers ---
     def prompt_unsaved(self):
@@ -908,3 +934,207 @@ class LineageCorrectorWidget(QWidget):
         QMessageBox.information(
             self, "Saved", f"Corrected 3D masks saved to:\n{out_path}"
         )
+
+    def export_data(self):
+        if not self.base_folder:
+            QMessageBox.warning(self, "Error", "No folder selected.")
+            return
+
+        # 1. Enforce saving before export
+        self.apply_edits_to_master()  # Sync any active brush strokes
+        if getattr(self, "unsaved_changes", False) or getattr(
+            self, "mask_modified", False
+        ):
+            QMessageBox.warning(
+                self,
+                "Unsaved Changes",
+                "You have unsaved edits in the current cell.\nPlease click 'Save Corrected Chlos (3D)' before exporting.",
+            )
+            return
+
+        scope = self.combo_export_scope.currentText()
+        resolved_only = self.chk_resolved_only.isChecked()
+        use_microns = self.chk_microns.isChecked()
+
+        export_dir = self.base_folder / "analysis" / "export"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        # 2. Automated Export Paths & Filenames
+        if scope == "Entire Folder":
+            lif_names = list(self.lif_files.keys())
+            file_name = f"{self.base_folder.name}.csv"
+        elif scope == "Current LIF":
+            if not self.current_lif:
+                return
+            lif_name_text = self.lif_combo.currentText()
+            lif_names = [lif_name_text]
+            stem = Path(lif_name_text).stem
+            file_name = f"{stem}.csv"
+        else:  # Current Vein
+            if not self.current_lif or self.vein_combo.currentIndex() < 0:
+                return
+            lif_name_text = self.lif_combo.currentText()
+            vein_name_current = self.vein_combo.currentText()
+            lif_names = [lif_name_text]
+            stem = Path(lif_name_text).stem
+            file_name = f"{stem}-{vein_name_current}.csv"
+
+        save_path = export_dir / file_name
+
+        rows = []
+        headers = [
+            "LIF_Name",
+            "Vein_ID",
+            "Cell_ID",
+            f"Cell_Area_{'um2' if use_microns else 'px'}",
+            f"Cell_Length_{'um' if use_microns else 'px'}",
+            f"Cell_Width_{'um' if use_microns else 'px'}",
+            "Num_Chloroplasts",
+            "Occupancy",
+            f"Chloroplast_Areas_{'um2' if use_microns else 'px'}",
+        ]
+        rows.append(headers)
+
+        self.global_status_lbl.setText(
+            f"Exporting {scope.lower()} to CSV... please wait."
+        )
+        QApplication.processEvents()  # Force UI to update before long computation
+
+        px_to_um = 193.94 / 1024.0
+        area_to_um2 = px_to_um**2
+
+        for lif_name in lif_names:
+            lif_path = self.lif_files[lif_name]
+            lif_obj = LifFile(lif_path)
+
+            for v_idx, img in enumerate(lif_obj.get_iter_image()):
+                # Skip if we only want the current vein
+                if scope == "Current Vein" and (
+                    lif_name != self.lif_combo.currentText()
+                    or v_idx != self.vein_combo.currentIndex()
+                ):
+                    continue
+
+                vein_name = img.name
+                prefix = f"{lif_name}_{vein_name}"
+
+                is_active_vein = (
+                    lif_name == self.lif_combo.currentText()
+                    and v_idx == self.vein_combo.currentIndex()
+                )
+
+                if (
+                    is_active_vein
+                    and self.full_cell_mask is not None
+                    and self.full_chlo_mask is not None
+                ):
+                    full_cell_mask_to_use = self.full_cell_mask
+                    full_chlo_mask_to_use = self.full_chlo_mask
+                else:
+                    cell_path = (
+                        self.base_folder / "analysis" / "cells" / f"{prefix}_cells.tif"
+                    )
+                    corrected_path = (
+                        self.base_folder
+                        / "analysis"
+                        / "chlos_corrected"
+                        / f"{prefix}_chlo.tif"
+                    )
+                    raw_path = (
+                        self.base_folder / "analysis" / "chlos" / f"{prefix}_chlo.tif"
+                    )
+
+                    if not cell_path.exists():
+                        continue
+
+                    full_cell_mask_to_use = tifffile.imread(cell_path)
+
+                    if corrected_path.exists():
+                        full_chlo_mask_to_use = tifffile.imread(corrected_path)
+                    elif raw_path.exists():
+                        full_chlo_mask_to_use = tifffile.imread(raw_path)
+                    else:
+                        continue
+
+                available_cells = np.unique(full_cell_mask_to_use)
+                available_cells = available_cells[available_cells > 0]
+
+                for cell_id in available_cells:
+                    props = regionprops(
+                        (full_cell_mask_to_use == cell_id).astype(np.uint8)
+                    )
+                    if not props:
+                        continue
+
+                    min_row, min_col, max_row, max_col = props[0].bbox
+                    cell_length_px = max_row - min_row
+                    cell_width_px = max_col - min_col
+                    cell_area_px = props[0].area
+
+                    pad = 20
+                    rmin, rmax = max(0, min_row - pad), min(
+                        full_cell_mask_to_use.shape[0], max_row + pad
+                    )
+                    cmin, cmax = max(0, min_col - pad), min(
+                        full_cell_mask_to_use.shape[1], max_col + pad
+                    )
+
+                    crop_cell_mask = full_cell_mask_to_use[rmin:rmax, cmin:cmax]
+                    crop_chlo_mask = full_chlo_mask_to_use[:, rmin:rmax, cmin:cmax]
+                    target_cell_bool = crop_cell_mask == cell_id
+
+                    rel, unrel = extract_all_chloroplasts_undirected(
+                        target_cell_bool, crop_chlo_mask, iom_threshold=0.6
+                    )
+
+                    if resolved_only and len(unrel) > 0:
+                        continue
+
+                    chloro_areas_px = [c["peak_mask"].sum() for c in rel]
+                    total_chloro_area_px = sum(chloro_areas_px)
+                    occupancy = (
+                        total_chloro_area_px / cell_area_px if cell_area_px > 0 else 0
+                    )
+
+                    if use_microns:
+                        out_c_area = cell_area_px * area_to_um2
+                        out_c_len = cell_length_px * px_to_um
+                        out_c_wid = cell_width_px * px_to_um
+                        out_ch_areas = [a * area_to_um2 for a in chloro_areas_px]
+                    else:
+                        out_c_area = cell_area_px
+                        out_c_len = cell_length_px
+                        out_c_wid = cell_width_px
+                        out_ch_areas = chloro_areas_px
+
+                    ch_areas_str = (
+                        ";".join([f"{a:.2f}" for a in out_ch_areas])
+                        if use_microns
+                        else ";".join([str(a) for a in out_ch_areas])
+                    )
+
+                    rows.append(
+                        [
+                            lif_name,
+                            vein_name,  # 3. Using the actual vein name instead of ID number
+                            cell_id,
+                            f"{out_c_area:.2f}" if use_microns else out_c_area,
+                            f"{out_c_len:.2f}" if use_microns else out_c_len,
+                            f"{out_c_wid:.2f}" if use_microns else out_c_wid,
+                            len(rel),
+                            f"{occupancy:.4f}",
+                            ch_areas_str,
+                        ]
+                    )
+
+        try:
+            with open(save_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerows(rows)
+            self.global_status_lbl.setText("Ready.")
+            QMessageBox.information(
+                self, "Export Complete", f"Data exported successfully to:\n{save_path}"
+            )
+        except Exception as e:
+            self.global_status_lbl.setText("Export Failed.")
+            QMessageBox.critical(self, "Export Error", f"Failed to save CSV:\n{str(e)}")
