@@ -229,15 +229,24 @@ class LineageCorrectorWidget(QWidget):
         # 5. Export
         self.layout.addWidget(QLabel("--- 5. Export ---"))
 
-        export_opt_layout = QHBoxLayout()
+        # First row of checkboxes
+        export_opt_layout1 = QHBoxLayout()
         self.chk_resolved_only = QCheckBox("Resolved cells only")
         self.chk_resolved_only.setChecked(True)
         self.chk_microns = QCheckBox("Export in microns")
         self.chk_microns.setChecked(True)
-        export_opt_layout.addWidget(self.chk_resolved_only)
-        export_opt_layout.addWidget(self.chk_microns)
-        self.layout.addLayout(export_opt_layout)
+        export_opt_layout1.addWidget(self.chk_resolved_only)
+        export_opt_layout1.addWidget(self.chk_microns)
+        self.layout.addLayout(export_opt_layout1)
 
+        # Second row of checkboxes
+        export_opt_layout2 = QHBoxLayout()
+        self.chk_export_chlo_rows = QCheckBox("Export each chloroplast as one row")
+        self.chk_export_chlo_rows.setChecked(True)
+        export_opt_layout2.addWidget(self.chk_export_chlo_rows)
+        self.layout.addLayout(export_opt_layout2)
+
+        # Export buttons
         export_btn_layout = QHBoxLayout()
         self.combo_export_scope = QComboBox()
         self.combo_export_scope.addItems(
@@ -955,6 +964,7 @@ class LineageCorrectorWidget(QWidget):
         scope = self.combo_export_scope.currentText()
         resolved_only = self.chk_resolved_only.isChecked()
         use_microns = self.chk_microns.isChecked()
+        export_chlo_rows = self.chk_export_chlo_rows.isChecked()
 
         export_dir = self.base_folder / "analysis" / "export"
         export_dir.mkdir(parents=True, exist_ok=True)
@@ -991,7 +1001,7 @@ class LineageCorrectorWidget(QWidget):
             f"Cell_Width_{'um' if use_microns else 'px'}",
             "Num_Chloroplasts",
             "Occupancy",
-            f"Chloroplast_Areas_{'um2' if use_microns else 'px'}",
+            f"Chloroplast_Area(s)_{'um2' if use_microns else 'px'}",
         ]
         rows.append(headers)
 
@@ -1107,25 +1117,65 @@ class LineageCorrectorWidget(QWidget):
                         out_c_wid = cell_width_px
                         out_ch_areas = chloro_areas_px
 
-                    ch_areas_str = (
-                        ";".join([f"{a:.2f}" for a in out_ch_areas])
-                        if use_microns
-                        else ";".join([str(a) for a in out_ch_areas])
-                    )
+                    # --- ROW GENERATION LOGIC ---
+                    c_area_fmt = f"{out_c_area:.2f}" if use_microns else out_c_area
+                    c_len_fmt = f"{out_c_len:.2f}" if use_microns else out_c_len
+                    c_wid_fmt = f"{out_c_wid:.2f}" if use_microns else out_c_wid
+                    num_chlo = len(rel)
+                    occ_fmt = f"{occupancy:.4f}"
 
-                    rows.append(
-                        [
-                            lif_name,
-                            vein_name,  # 3. Using the actual vein name instead of ID number
-                            cell_id,
-                            f"{out_c_area:.2f}" if use_microns else out_c_area,
-                            f"{out_c_len:.2f}" if use_microns else out_c_len,
-                            f"{out_c_wid:.2f}" if use_microns else out_c_wid,
-                            len(rel),
-                            f"{occupancy:.4f}",
-                            ch_areas_str,
-                        ]
-                    )
+                    if export_chlo_rows:
+                        if len(out_ch_areas) == 0:
+                            # Handle cells with 0 chloroplasts
+                            rows.append(
+                                [
+                                    lif_name,
+                                    vein_name,
+                                    cell_id,
+                                    c_area_fmt,
+                                    c_len_fmt,
+                                    c_wid_fmt,
+                                    num_chlo,
+                                    occ_fmt,
+                                    "",
+                                ]
+                            )
+                        else:
+                            # Add a separate row for each chloroplast
+                            for ch_area in out_ch_areas:
+                                rows.append(
+                                    [
+                                        lif_name,
+                                        vein_name,
+                                        cell_id,
+                                        c_area_fmt,
+                                        c_len_fmt,
+                                        c_wid_fmt,
+                                        num_chlo,
+                                        occ_fmt,
+                                        f"{ch_area:.2f}" if use_microns else ch_area,
+                                    ]
+                                )
+                    else:
+                        # Fallback to the original semicolon-separated list
+                        ch_areas_str = (
+                            ";".join([f"{a:.2f}" for a in out_ch_areas])
+                            if use_microns
+                            else ";".join([str(a) for a in out_ch_areas])
+                        )
+                        rows.append(
+                            [
+                                lif_name,
+                                vein_name,
+                                cell_id,
+                                c_area_fmt,
+                                c_len_fmt,
+                                c_wid_fmt,
+                                num_chlo,
+                                occ_fmt,
+                                ch_areas_str,
+                            ]
+                        )
 
         try:
             with open(save_path, "w", newline="", encoding="utf-8") as f:
