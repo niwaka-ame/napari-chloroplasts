@@ -808,6 +808,9 @@ class LineageCorrectorWidget(QWidget):
             display_data, name="Editable Chlo Masks", opacity=0.7
         )
 
+        # Explicitly lock the brush footprint strictly to the 2D viewing plane (safety net)
+        edit_layer.n_edit_dimensions = 2
+
         # Attach the custom mouse hook to our new layer
         edit_layer.mouse_drag_callbacks.append(self.custom_mouse_hook)
 
@@ -837,6 +840,48 @@ class LineageCorrectorWidget(QWidget):
             bound = find_boundaries(chlo["peak_mask"], mode="outer")
             peak_contours_3d[:, bound] = i
         self.viewer.add_labels(peak_contours_3d, name="Reliable Peaks", opacity=1.0)
+
+        # --- NEW: Reliable Info Text Layer ---
+        text_coords = []
+        text_labels = []
+
+        # Get the total number of Z-slices in the current volume
+        z_dim = self.current_crop_chlo_mask.shape[0]
+
+        for i, chlo in enumerate(self.reliable_chlos, start=1):
+            mask_2d = chlo["peak_mask"]
+            area = mask_2d.sum()
+
+            # Find the centroid of the peak 2D mask to place the text
+            props = regionprops(mask_2d.astype(np.uint8))
+            if props:
+                y, x = props[0].centroid
+                label_text = f"ID:{i} | A:{area}"
+
+                # Duplicate this text point across EVERY Z-slice
+                for z in range(z_dim):
+                    text_coords.append([z, y, x])
+                    text_labels.append(label_text)
+
+        if text_coords:
+            text_kwargs = {
+                "string": "{label}",
+                "color": "yellow",
+                "size": 10,
+                "anchor": "center",
+            }
+            properties = {"label": text_labels}
+
+            # Add an invisible points layer purely to host the 3D text
+            self.viewer.add_points(
+                np.array(text_coords),
+                properties=properties,
+                text=text_kwargs,
+                size=0,  # Hides the points themselves
+                name="Reliable Info",
+                visible=False,  # Default hidden
+            )
+        # -------------------------------------
 
         self.on_mode_changed()  # Re-apply the selected editing mode to the fresh layer
 
