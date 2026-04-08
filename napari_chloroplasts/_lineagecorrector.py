@@ -828,6 +828,10 @@ class LineageCorrectorWidget(QWidget):
             blending="additive",
         )
 
+        # --- NEW: Containers for Unreliable Z-specific text ---
+        unrel_text_coords = []
+        unrel_text_labels = []
+
         if self.rad_all.isChecked() or len(self.unreliable_chlos) == 0:
             display_data = self.current_crop_chlo_mask.copy()
             self.orig_active_mask_bool = None
@@ -837,6 +841,14 @@ class LineageCorrectorWidget(QWidget):
             for z, label_id in nodes:
                 mask = self.current_crop_chlo_mask[z] == label_id
                 display_data[z][mask] = label_id
+
+                # Calculate centroid to place the ID text on this specific Z-slice
+                props = regionprops(mask.astype(np.uint8))
+                if props:
+                    y, x = props[0].centroid
+                    unrel_text_coords.append([z, y, x])
+                    unrel_text_labels.append(str(label_id))  # Just the ID number
+
             self.orig_active_mask_bool = display_data > 0
 
         edit_layer = self.viewer.add_labels(
@@ -917,6 +929,26 @@ class LineageCorrectorWidget(QWidget):
                 visible=False,  # Default hidden
             )
         # -------------------------------------
+
+        # --- NEW: Unreliable IDs Text Layer (Z-specific) ---
+        if unrel_text_coords:
+            unrel_text_kwargs = {
+                "string": "{label}",
+                "color": "white",  # White usually contrasts well against the raw red background
+                "size": 12,
+                "anchor": "center",
+            }
+            unrel_properties = {"label": unrel_text_labels}
+
+            self.viewer.add_points(
+                np.array(unrel_text_coords),
+                properties=unrel_properties,
+                text=unrel_text_kwargs,
+                size=0,  # Hides the points
+                name="Unreliable IDs",
+                visible=True,  # Default visible!
+            )
+        # ---------------------------------------------------
 
         self.on_mode_changed()  # Re-apply the selected editing mode to the fresh layer
 
