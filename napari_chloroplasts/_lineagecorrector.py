@@ -675,14 +675,21 @@ class LineageCorrectorWidget(QWidget):
                     if num_features > 1:
                         split_occurred = True
                         props = regionprops(labeled_components)
-                        # Sort components by area so the largest piece keeps the original ID
+                        # Sort components by area so the largest piece is evaluated first
                         props.sort(key=lambda x: x.area, reverse=True)
 
-                        # Assign new unique IDs to the severed smaller pieces on this slice
-                        for p in props[1:]:
-                            new_id = max(self.full_chlo_mask.max(), new_data.max()) + 1
-                            # Reassign ONLY on the active Z-slice
-                            new_data[z_idx][labeled_components == p.label] = new_id
+                        min_area = 10  # Configurable debris threshold
+
+                        for i, p in enumerate(props):
+                            if p.area < min_area:
+                                # DEBRIS: Erase it completely by setting to background (0)
+                                new_data[z_idx][labeled_components == p.label] = 0
+                            elif i > 0:
+                                # VALID SEVERED PIECE: Assign a new unique ID
+                                new_id = (
+                                    max(self.full_chlo_mask.max(), new_data.max()) + 1
+                                )
+                                new_data[z_idx][labeled_components == p.label] = new_id
 
             if split_occurred:
                 layer.data = new_data
