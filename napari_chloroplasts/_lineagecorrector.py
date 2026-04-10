@@ -176,10 +176,17 @@ class LineageCorrectorWidget(QWidget):
         self.rad_merge = QRadioButton("Merge")
         self.rad_split = QRadioButton("Split")
         self.rad_add = QRadioButton("Add")
+        self.rad_delete = QRadioButton("Delete")  # NEW: Delete button
         self.rad_normal.setChecked(True)
 
         self.mode_group = QButtonGroup()
-        for rad in [self.rad_normal, self.rad_merge, self.rad_split, self.rad_add]:
+        for rad in [
+            self.rad_normal,
+            self.rad_merge,
+            self.rad_split,
+            self.rad_add,
+            self.rad_delete,
+        ]:
             self.mode_group.addButton(rad)
             mode_layout.addWidget(rad)
             rad.toggled.connect(self.on_mode_changed)
@@ -621,9 +628,44 @@ class LineageCorrectorWidget(QWidget):
             self.global_status_lbl.setText(
                 f"Add Mode: Auto-assigned new ID {layer.selected_label}."
             )
+        elif self.rad_delete.isChecked():
+            layer.mode = "pan_zoom"
+            self.global_status_lbl.setText(
+                "Delete Mode: Click a mask to delete it on the current Z-slice."
+            )
 
     def custom_mouse_hook(self, layer, event):
-        """Handles manual history saving, custom consecutive merging, and auto-splitting."""
+        """Handles manual history saving, custom consecutive merging, auto-splitting, and deletion."""
+
+        # --- NEW: Custom DELETE Logic ---
+        if self.rad_delete.isChecked() and event.button == 1:
+            coords = tuple(
+                int(np.round(c)) for c in layer.world_to_data(event.position)
+            )
+
+            # Check bounds
+            if all(0 <= c < m for c, m in zip(coords, layer.data.shape)):
+                clicked_id = layer.data[coords]
+                if clicked_id > 0:
+                    self.save_history(layer)
+
+                    # Overwrite target mask with 0 (background) ONLY on the active Z-stack
+                    new_data = layer.data.copy()
+                    z_idx = coords[0]  # The Z-slice where the user clicked
+
+                    # Restrict the reassignment to only the current Z-slice
+                    slice_data = new_data[z_idx]
+                    slice_data[slice_data == clicked_id] = 0
+
+                    layer.data = new_data
+                    self.mask_modified = True
+                    self.global_status_lbl.setText(
+                        f"Deleted ID {clicked_id} on Z-slice {z_idx}."
+                    )
+            yield
+            return
+        # --------------------------------
+
         # Custom MERGE Logic
         if self.rad_merge.isChecked() and event.button == 1:
             coords = tuple(
