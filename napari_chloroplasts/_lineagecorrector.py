@@ -22,6 +22,7 @@ from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QApplication,
+    QSpinBox,  # <-- ADDED QSpinBox
 )
 
 # --- USER PROVIDED LOGIC ---
@@ -288,12 +289,31 @@ class LineageCorrectorWidget(QWidget):
         self.global_status_lbl = QLabel("Ready.")
         self.layout.addWidget(self.global_status_lbl)
 
-        self.layout.addWidget(QLabel("--- 4. Save ---"))
+        # --- NEW: Highlight Thresholds ---
+        self.layout.addWidget(QLabel("--- 4. Highlight Thresholds ---"))
+        thresh_layout = QHBoxLayout()
+
+        self.spin_z_thresh = QSpinBox()
+        self.spin_z_thresh.setRange(0, 9999)
+        self.spin_z_thresh.setValue(1)  # Default 1
+
+        self.spin_dist_thresh = QSpinBox()
+        self.spin_dist_thresh.setRange(0, 9999)
+        self.spin_dist_thresh.setValue(15)  # Default 15
+
+        thresh_layout.addWidget(QLabel("Max Z-slice:"))
+        thresh_layout.addWidget(self.spin_z_thresh)
+        thresh_layout.addWidget(QLabel("Max Dist (px):"))
+        thresh_layout.addWidget(self.spin_dist_thresh)
+        self.layout.addLayout(thresh_layout)
+        # ---------------------------------
+
+        self.layout.addWidget(QLabel("--- 5. Save ---"))
         self.btn_save_corrected = QPushButton("💾 Save Corrected Chlos (3D)")
         self.layout.addWidget(self.btn_save_corrected)
 
         # 5. Export
-        self.layout.addWidget(QLabel("--- 5. Export ---"))
+        self.layout.addWidget(QLabel("--- 6. Export ---"))
 
         # First row of checkboxes
         export_opt_layout1 = QHBoxLayout()
@@ -348,6 +368,10 @@ class LineageCorrectorWidget(QWidget):
         self.rad_unreliable.clicked.connect(self.on_visibility_toggle)
         self.btn_prev_unrel.clicked.connect(lambda: self.step_unreliable(-1))
         self.btn_next_unrel.clicked.connect(lambda: self.step_unreliable(1))
+
+        # Hook up the new spin boxes to update the graph colors dynamically
+        self.spin_z_thresh.valueChanged.connect(self.on_threshold_changed)
+        self.spin_dist_thresh.valueChanged.connect(self.on_threshold_changed)
 
         self.btn_update_graph.clicked.connect(self.update_graph_action)
         self.btn_save_corrected.clicked.connect(self.save_corrected)
@@ -897,6 +921,11 @@ class LineageCorrectorWidget(QWidget):
         # 2. Reset the flag
         self.mask_modified = False
 
+    def on_threshold_changed(self):
+        """Safely updates the text layer colors when the threshold spin boxes are changed."""
+        self.apply_edits_to_master()
+        self.render_viewer()
+
     def on_visibility_toggle(self):
         self.apply_edits_to_master()
         self.render_viewer()
@@ -995,6 +1024,7 @@ class LineageCorrectorWidget(QWidget):
         # --- NEW: Reliable Info Text Layer ---
         text_coords = []
         text_labels = []
+        text_colors = []  # <-- Array to hold individual colors
 
         # Get the total number of Z-slices in the current volume
         z_dim = self.current_crop_chlo_mask.shape[0]
@@ -1002,9 +1032,14 @@ class LineageCorrectorWidget(QWidget):
         # Calculate the distance map so we can display it dynamically
         dist_map = compute_vertical_distance_map(self.target_cell_bool)
 
+        # Grab threshold values directly from the new UI spinboxes
+        z_thresh = self.spin_z_thresh.value()
+        dist_thresh = self.spin_dist_thresh.value()
+
         for i, chlo in enumerate(self.reliable_chlos, start=1):
             mask_2d = chlo["peak_mask"]
             area = mask_2d.sum()
+            peak_z = chlo["peak_z"]
 
             # Find the minimum distance on the heat map for this specific mask
             ch_dist = dist_map[mask_2d].min() if np.any(mask_2d) else 0.0
@@ -1017,19 +1052,27 @@ class LineageCorrectorWidget(QWidget):
                 # Format into three separate lines for readability
                 label_text = f"ID: {i}\nA: {area}\nD: {ch_dist:.2f}"
 
+                # Determine color logic based on user spinbox inputs
+                is_yellow = (peak_z <= z_thresh) and (ch_dist < dist_thresh)
+                color_str = "yellow" if is_yellow else "cyan"
+
                 # Duplicate this text point across EVERY Z-slice
                 for z in range(z_dim):
                     text_coords.append([z, y, x])
                     text_labels.append(label_text)
+                    text_colors.append(color_str)
 
         if text_coords:
+            # Pass the list of colors directly to the 'color' key!
             text_kwargs = {
                 "string": "{label}",
-                "color": "yellow",
+                "color": text_colors,  # <--- Changed this line
                 "size": 10,
                 "anchor": "center",
             }
-            properties = {"label": text_labels}
+            properties = {
+                "label": text_labels,
+            }
 
             # Add an invisible points layer purely to host the 3D text
             self.viewer.add_points(
@@ -1038,7 +1081,7 @@ class LineageCorrectorWidget(QWidget):
                 text=text_kwargs,
                 size=0,  # Hides the points themselves
                 name="Reliable Info",
-                visible=False,  # Default hidden
+                visible=True,  # Default visible
             )
         # -------------------------------------
 
