@@ -6,7 +6,8 @@ import csv
 from pathlib import Path
 from readlif.reader import LifFile
 from skimage.measure import regionprops, label as sk_label
-from skimage.segmentation import find_boundaries
+from skimage.segmentation import find_boundaries, watershed  # <-- ADDED watershed
+from skimage.morphology import binary_dilation, binary_opening, disk
 from qtpy.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -79,6 +80,44 @@ def extract_all_chloroplasts_undirected(cell_mask, chloro_stack, iom_threshold=0
         )
 
     return reliable, unreliable
+
+
+def compute_directional_contours(binary_img):
+    """
+    Splits a 1-pixel wide binary contour into horizontal and vertical segments.
+    Uses morphological ops to find "sure" pieces, then watershed to fill the gaps
+    perfectly along the original 1-pixel line.
+    Returns a uint8 mask where 1 = horizontal, 2 = vertical.
+    """
+    # 1. Thicken the line to "swallow" the jagged wiggles.
+    thick_lines = binary_dilation(binary_img, disk(2))
+
+    # 2. Define horizontal and vertical stencils (footprints).
+    h_footprint = np.ones((1, 7), dtype=bool)
+    v_footprint = np.ones((7, 1), dtype=bool)
+
+    # 3. Extract the thick horizontal and vertical segments.
+    thick_horizontal = binary_opening(thick_lines, h_footprint)
+    thick_vertical = binary_opening(thick_lines, v_footprint)
+
+    # 4. Map back to the original 1px contour to get our "sure" broken pieces
+    sure_horizontal = binary_img & thick_horizontal
+    sure_vertical = binary_img & thick_vertical
+
+    # 5. Create a blank canvas to hold our "markers" (known labels)
+    markers = np.zeros_like(binary_img, dtype=int)
+    markers[sure_horizontal] = 1
+    markers[sure_vertical] = 2
+
+    # 6. Spread the labels using Watershed, restricted to the exact original contour
+    filled_contour = watershed(
+        image=np.zeros_like(binary_img),
+        markers=markers,
+        mask=binary_img,
+        connectivity=2,
+    )
+
+    return filled_contour.astype(np.uint8)
 
 
 # --- NAPARI PLUGIN UI ---
@@ -911,18 +950,20 @@ class LineageCorrectorWidget(QWidget):
         edit_layer.events.data.connect(on_data_change)
         edit_layer.events.paint.connect(on_data_change)
 
+        # --- Directional Cell Contour Logic ---
         cell_bound_2d = find_boundaries(self.target_cell_bool, mode="outer")
+
+        # Call the external function to calculate orientations
+        directional_bound_2d = compute_directional_contours(cell_bound_2d)
+
+        # Broadcast to 3D for the viewer
         cell_contour_3d = np.zeros_like(crop_chlo_raw, dtype=np.uint8)
-        cell_contour_3d[:] = cell_bound_2d
+        cell_contour_3d[:] = directional_bound_2d
 
         cell_layer = self.viewer.add_labels(
             cell_contour_3d, name="Cell Contour", opacity=1.0
         )
-        try:
-            cell_layer.color_mode = "direct"
-            cell_layer.color = {1: "white"}
-        except AttributeError:
-            pass
+        # -------------------------------------------
 
         peak_contours_3d = np.zeros_like(self.current_crop_chlo_mask, dtype=np.uint16)
         for i, chlo in enumerate(self.reliable_chlos, start=1):
