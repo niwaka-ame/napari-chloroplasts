@@ -8,6 +8,7 @@ from readlif.reader import LifFile
 from skimage.measure import regionprops, label as sk_label
 from skimage.segmentation import find_boundaries, watershed  # <-- ADDED watershed
 from skimage.morphology import binary_dilation, binary_opening, disk
+from scipy.ndimage import distance_transform_edt  # <-- ADDED distance transform
 from qtpy.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -118,6 +119,25 @@ def compute_directional_contours(binary_img):
     )
 
     return filled_contour.astype(np.uint8)
+
+
+def compute_vertical_distance_map(cell_mask):
+    """
+    Computes a distance map from every pixel in the cell mask to the nearest
+    vertical edge of its contour.
+    """
+    cell_bound_2d = find_boundaries(cell_mask, mode="outer")
+    directional_bound_2d = compute_directional_contours(cell_bound_2d)
+    vertical_mask = directional_bound_2d == 2
+
+    # distance_transform_edt computes distance to nearest '0' (False),
+    # so we invert the mask to make vertical pixels False.
+    if np.any(vertical_mask):
+        dist_map = distance_transform_edt(~vertical_mask)
+    else:
+        dist_map = np.zeros_like(vertical_mask, dtype=float)
+
+    return dist_map
 
 
 # --- NAPARI PLUGIN UI ---
@@ -963,6 +983,7 @@ class LineageCorrectorWidget(QWidget):
         cell_layer = self.viewer.add_labels(
             cell_contour_3d, name="Cell Contour", opacity=1.0
         )
+        cell_layer.color = {1: "cyan", 2: "magenta"}
         # -------------------------------------------
 
         peak_contours_3d = np.zeros_like(self.current_crop_chlo_mask, dtype=np.uint16)
@@ -978,15 +999,23 @@ class LineageCorrectorWidget(QWidget):
         # Get the total number of Z-slices in the current volume
         z_dim = self.current_crop_chlo_mask.shape[0]
 
+        # Calculate the distance map so we can display it dynamically
+        dist_map = compute_vertical_distance_map(self.target_cell_bool)
+
         for i, chlo in enumerate(self.reliable_chlos, start=1):
             mask_2d = chlo["peak_mask"]
             area = mask_2d.sum()
+
+            # Find the minimum distance on the heat map for this specific mask
+            ch_dist = dist_map[mask_2d].min() if np.any(mask_2d) else 0.0
 
             # Find the centroid of the peak 2D mask to place the text
             props = regionprops(mask_2d.astype(np.uint8))
             if props:
                 y, x = props[0].centroid
-                label_text = f"ID:{i} | A:{area}"
+
+                # Format into three separate lines for readability
+                label_text = f"ID: {i}\nA: {area}\nD: {ch_dist:.2f}"
 
                 # Duplicate this text point across EVERY Z-slice
                 for z in range(z_dim):
@@ -1122,6 +1151,7 @@ class LineageCorrectorWidget(QWidget):
                 "Chloroplast_ID",  # ID column
                 f"Chloroplast_Area_{'um2' if use_microns else 'px'}",
                 "Peak_Z",  # NEW: Track the Z-slice of the max area
+                f"Dist_to_Vertical_{'um' if use_microns else 'px'}",  # NEW: Distance column
             ]
         else:
             headers = [
@@ -1135,6 +1165,7 @@ class LineageCorrectorWidget(QWidget):
                 "Occupancy",
                 f"Chloroplast_Area(s)_{'um2' if use_microns else 'px'}",
                 "Peak_Z(s)",  # NEW: Track the Z-slices in a list
+                f"Dist(s)_to_Vertical_{'um' if use_microns else 'px'}",  # NEW: Distance list
             ]
 
         rows.append(headers)
@@ -1231,6 +1262,9 @@ class LineageCorrectorWidget(QWidget):
                     crop_chlo_mask = full_chlo_mask_to_use[:, rmin:rmax, cmin:cmax]
                     target_cell_bool = crop_cell_mask == cell_id
 
+                    # --- NEW: Compute Distance Map to Vertical Contour ---
+                    dist_map = compute_vertical_distance_map(target_cell_bool)
+
                     rel, unrel = extract_all_chloroplasts_undirected(
                         target_cell_bool, crop_chlo_mask, iom_threshold=0.6
                     )
@@ -1243,6 +1277,16 @@ class LineageCorrectorWidget(QWidget):
                         c["peak_z"] for c in rel
                     ]  # NEW: Extract Peak Z slices
 
+                    # NEW: Find the minimum distance on the heat map for each chloroplast mask
+                    chloro_dists_px = [
+                        (
+                            dist_map[c["peak_mask"]].min()
+                            if np.any(c["peak_mask"])
+                            else 0.0
+                        )
+                        for c in rel
+                    ]
+
                     total_chloro_area_px = sum(chloro_areas_px)
                     occupancy = (
                         total_chloro_area_px / cell_area_px if cell_area_px > 0 else 0
@@ -1253,11 +1297,15 @@ class LineageCorrectorWidget(QWidget):
                         out_c_len = cell_length_px * px_to_um
                         out_c_wid = cell_width_px * px_to_um
                         out_ch_areas = [a * area_to_um2 for a in chloro_areas_px]
+                        out_ch_dists = [
+                            d * px_to_um for d in chloro_dists_px
+                        ]  # Convert distances
                     else:
                         out_c_area = cell_area_px
                         out_c_len = cell_length_px
                         out_c_wid = cell_width_px
                         out_ch_areas = chloro_areas_px
+                        out_ch_dists = chloro_dists_px  # Keep as pixels
 
                     # --- ROW GENERATION LOGIC ---
                     c_area_fmt = f"{out_c_area:.2f}" if use_microns else out_c_area
@@ -1282,11 +1330,14 @@ class LineageCorrectorWidget(QWidget):
                                     "",  # Blank Chlo ID
                                     "",  # Blank Chlo Area
                                     "",  # Blank Peak Z
+                                    "",  # Blank Dist
                                 ]
                             )
                         else:
                             # Add a separate row for each chloroplast and increment counter
-                            for ch_area, peak_z in zip(out_ch_areas, chloro_peak_zs):
+                            for ch_area, peak_z, ch_dist in zip(
+                                out_ch_areas, chloro_peak_zs, out_ch_dists
+                            ):
                                 rows.append(
                                     [
                                         lif_name,
@@ -1300,6 +1351,7 @@ class LineageCorrectorWidget(QWidget):
                                         cell_chlo_counter,  # Use the cell-specific counter
                                         f"{ch_area:.2f}" if use_microns else ch_area,
                                         peak_z,  # Append individual Peak Z
+                                        f"{ch_dist:.2f}",  # Append formatted distance
                                     ]
                                 )
                                 cell_chlo_counter += 1
@@ -1313,6 +1365,9 @@ class LineageCorrectorWidget(QWidget):
                         peak_zs_str = ";".join(
                             [str(z) for z in chloro_peak_zs]
                         )  # Create semicolon string for Zs
+                        dists_str = ";".join(
+                            [f"{d:.2f}" for d in out_ch_dists]
+                        )  # Create semicolon string for dists
 
                         rows.append(
                             [
@@ -1326,6 +1381,7 @@ class LineageCorrectorWidget(QWidget):
                                 occ_fmt,
                                 ch_areas_str,
                                 peak_zs_str,  # Append list of Peak Zs
+                                dists_str,  # Append list of distances
                             ]
                         )
 
