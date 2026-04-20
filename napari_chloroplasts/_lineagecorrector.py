@@ -329,7 +329,12 @@ class LineageCorrectorWidget(QWidget):
         export_opt_layout2 = QHBoxLayout()
         self.chk_export_chlo_rows = QCheckBox("Export each chloroplast as one row")
         self.chk_export_chlo_rows.setChecked(True)
+
+        self.chk_export_selected = QCheckBox("Export only selected (cyan)")  # NEW
+        self.chk_export_selected.setChecked(False)
+
         export_opt_layout2.addWidget(self.chk_export_chlo_rows)
+        export_opt_layout2.addWidget(self.chk_export_selected)
         self.layout.addLayout(export_opt_layout2)
 
         # Export buttons
@@ -1066,7 +1071,7 @@ class LineageCorrectorWidget(QWidget):
             # Pass the list of colors directly to the 'color' key!
             text_kwargs = {
                 "string": "{label}",
-                "color": text_colors,  # <--- Changed this line
+                "color": text_colors,
                 "size": 10,
                 "anchor": "center",
             }
@@ -1107,7 +1112,7 @@ class LineageCorrectorWidget(QWidget):
 
         self.on_mode_changed()  # Re-apply the selected editing mode to the fresh layer
 
-        # FORCE FOCUS: Make the editable layer immediately active so user doesn't have to click it
+        # FORCE FOCUS: Make the editable layer immediately active so user doesnt have to click it
         self.viewer.layers.selection.active = edit_layer
 
         self.viewer.reset_view()
@@ -1152,21 +1157,30 @@ class LineageCorrectorWidget(QWidget):
         resolved_only = self.chk_resolved_only.isChecked()
         use_microns = self.chk_microns.isChecked()
         export_chlo_rows = self.chk_export_chlo_rows.isChecked()
+        export_selected_only = (
+            self.chk_export_selected.isChecked()
+        )  # Check if filtering is active
+
+        # Grab threshold values directly from the new UI spinboxes
+        z_thresh = self.spin_z_thresh.value()
+        dist_thresh = self.spin_dist_thresh.value()
 
         export_dir = self.base_folder / "analysis" / "export"
         export_dir.mkdir(parents=True, exist_ok=True)
 
-        # 2. Automated Export Paths & Filenames
+        # 2. Automated Export Paths & Filenames (Apply suffix if selected-only export)
+        suffix = "_selected.csv" if export_selected_only else ".csv"
+
         if scope == "Entire Folder":
             lif_names = list(self.lif_files.keys())
-            file_name = f"{self.base_folder.name}.csv"
+            file_name = f"{self.base_folder.name}{suffix}"
         elif scope == "Current LIF":
             if not self.current_lif:
                 return
             lif_name_text = self.lif_combo.currentText()
             lif_names = [lif_name_text]
             stem = Path(lif_name_text).stem
-            file_name = f"{stem}.csv"
+            file_name = f"{stem}{suffix}"
         else:  # Current Vein
             if not self.current_lif or self.vein_combo.currentIndex() < 0:
                 return
@@ -1174,7 +1188,7 @@ class LineageCorrectorWidget(QWidget):
             vein_name_current = self.vein_combo.currentText()
             lif_names = [lif_name_text]
             stem = Path(lif_name_text).stem
-            file_name = f"{stem}-{vein_name_current}.csv"
+            file_name = f"{stem}-{vein_name_current}{suffix}"
 
         save_path = export_dir / file_name
 
@@ -1315,20 +1329,27 @@ class LineageCorrectorWidget(QWidget):
                     if resolved_only and len(unrel) > 0:
                         continue
 
-                    chloro_areas_px = [c["peak_mask"].sum() for c in rel]
-                    chloro_peak_zs = [
-                        c["peak_z"] for c in rel
-                    ]  # NEW: Extract Peak Z slices
+                    # Filter lists based on the 'selected (cyan)' criteria if checked
+                    chloro_areas_px = []
+                    chloro_peak_zs = []
+                    chloro_dists_px = []
 
-                    # NEW: Find the minimum distance on the heat map for each chloroplast mask
-                    chloro_dists_px = [
-                        (
-                            dist_map[c["peak_mask"]].min()
-                            if np.any(c["peak_mask"])
-                            else 0.0
-                        )
-                        for c in rel
-                    ]
+                    for c in rel:
+                        mask_2d = c["peak_mask"]
+                        peak_z = c["peak_z"]
+
+                        # Find the minimum distance on the heat map for each chloroplast mask
+                        ch_dist = dist_map[mask_2d].min() if np.any(mask_2d) else 0.0
+
+                        # Determine color logic based on user spinbox inputs
+                        if export_selected_only:
+                            is_yellow = (peak_z <= z_thresh) and (ch_dist < dist_thresh)
+                            if is_yellow:
+                                continue  # Skip non-selected (yellow) chloroplasts
+
+                        chloro_areas_px.append(mask_2d.sum())
+                        chloro_peak_zs.append(peak_z)
+                        chloro_dists_px.append(ch_dist)
 
                     total_chloro_area_px = sum(chloro_areas_px)
                     occupancy = (
@@ -1354,7 +1375,7 @@ class LineageCorrectorWidget(QWidget):
                     c_area_fmt = f"{out_c_area:.2f}" if use_microns else out_c_area
                     c_len_fmt = f"{out_c_len:.2f}" if use_microns else out_c_len
                     c_wid_fmt = f"{out_c_wid:.2f}" if use_microns else out_c_wid
-                    num_chlo = len(rel)
+                    num_chlo = len(chloro_areas_px)
                     occ_fmt = f"{occupancy:.4f}"
 
                     if export_chlo_rows:
