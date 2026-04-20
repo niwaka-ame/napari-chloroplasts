@@ -1080,6 +1080,7 @@ class LineageCorrectorWidget(QWidget):
                 "Occupancy",
                 "Chloroplast_ID",  # ID column
                 f"Chloroplast_Area_{'um2' if use_microns else 'px'}",
+                "Peak_Z",  # NEW: Track the Z-slice of the max area
             ]
         else:
             headers = [
@@ -1092,6 +1093,7 @@ class LineageCorrectorWidget(QWidget):
                 "Num_Chloroplasts",
                 "Occupancy",
                 f"Chloroplast_Area(s)_{'um2' if use_microns else 'px'}",
+                "Peak_Z(s)",  # NEW: Track the Z-slices in a list
             ]
 
         rows.append(headers)
@@ -1196,6 +1198,10 @@ class LineageCorrectorWidget(QWidget):
                         continue
 
                     chloro_areas_px = [c["peak_mask"].sum() for c in rel]
+                    chloro_peak_zs = [
+                        c["peak_z"] for c in rel
+                    ]  # NEW: Extract Peak Z slices
+
                     total_chloro_area_px = sum(chloro_areas_px)
                     occupancy = (
                         total_chloro_area_px / cell_area_px if cell_area_px > 0 else 0
@@ -1234,11 +1240,12 @@ class LineageCorrectorWidget(QWidget):
                                     occ_fmt,
                                     "",  # Blank Chlo ID
                                     "",  # Blank Chlo Area
+                                    "",  # Blank Peak Z
                                 ]
                             )
                         else:
                             # Add a separate row for each chloroplast and increment counter
-                            for ch_area in out_ch_areas:
+                            for ch_area, peak_z in zip(out_ch_areas, chloro_peak_zs):
                                 rows.append(
                                     [
                                         lif_name,
@@ -1251,6 +1258,7 @@ class LineageCorrectorWidget(QWidget):
                                         occ_fmt,
                                         cell_chlo_counter,  # Use the cell-specific counter
                                         f"{ch_area:.2f}" if use_microns else ch_area,
+                                        peak_z,  # Append individual Peak Z
                                     ]
                                 )
                                 cell_chlo_counter += 1
@@ -1261,6 +1269,10 @@ class LineageCorrectorWidget(QWidget):
                             if use_microns
                             else ";".join([str(a) for a in out_ch_areas])
                         )
+                        peak_zs_str = ";".join(
+                            [str(z) for z in chloro_peak_zs]
+                        )  # Create semicolon string for Zs
+
                         rows.append(
                             [
                                 lif_name,
@@ -1272,6 +1284,7 @@ class LineageCorrectorWidget(QWidget):
                                 num_chlo,
                                 occ_fmt,
                                 ch_areas_str,
+                                peak_zs_str,  # Append list of Peak Zs
                             ]
                         )
 
