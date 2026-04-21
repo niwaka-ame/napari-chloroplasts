@@ -294,16 +294,16 @@ class LineageCorrectorWidget(QWidget):
         thresh_layout = QHBoxLayout()
 
         self.spin_z_thresh = QSpinBox()
-        self.spin_z_thresh.setRange(0, 9999)
+        self.spin_z_thresh.setRange(0, 20)
         self.spin_z_thresh.setValue(1)  # Default 1
 
         self.spin_dist_thresh = QSpinBox()
-        self.spin_dist_thresh.setRange(0, 9999)
-        self.spin_dist_thresh.setValue(15)  # Default 15
+        self.spin_dist_thresh.setRange(0, 100)
+        self.spin_dist_thresh.setValue(10)  # Default 10%
 
         thresh_layout.addWidget(QLabel("Max Z-slice:"))
         thresh_layout.addWidget(self.spin_z_thresh)
-        thresh_layout.addWidget(QLabel("Max Dist (px):"))
+        thresh_layout.addWidget(QLabel("Max Dist (% width):"))
         thresh_layout.addWidget(self.spin_dist_thresh)
         self.layout.addLayout(thresh_layout)
         # ---------------------------------
@@ -330,7 +330,7 @@ class LineageCorrectorWidget(QWidget):
         self.chk_export_chlo_rows = QCheckBox("Export each chloroplast as one row")
         self.chk_export_chlo_rows.setChecked(True)
 
-        self.chk_export_selected = QCheckBox("Export only selected (cyan)")  # NEW
+        self.chk_export_selected = QCheckBox("Export only selected")  # NEW
         self.chk_export_selected.setChecked(False)
 
         export_opt_layout2.addWidget(self.chk_export_chlo_rows)
@@ -1039,7 +1039,14 @@ class LineageCorrectorWidget(QWidget):
 
         # Grab threshold values directly from the new UI spinboxes
         z_thresh = self.spin_z_thresh.value()
-        dist_thresh = self.spin_dist_thresh.value()
+        dist_thresh_percent = self.spin_dist_thresh.value()
+
+        # Calculate the dynamic pixel threshold based on the cell's actual width
+        cell_props = regionprops(self.target_cell_bool.astype(np.uint8))
+        cell_width_px = (
+            cell_props[0].bbox[3] - cell_props[0].bbox[1] if cell_props else 0
+        )
+        dist_thresh_px = (dist_thresh_percent / 100.0) * cell_width_px
 
         for i, chlo in enumerate(self.reliable_chlos, start=1):
             mask_2d = chlo["peak_mask"]
@@ -1058,7 +1065,7 @@ class LineageCorrectorWidget(QWidget):
                 label_text = f"ID: {i}\nA: {area}\nD: {ch_dist:.2f}"
 
                 # Determine color logic based on user spinbox inputs
-                is_yellow = (peak_z <= z_thresh) and (ch_dist < dist_thresh)
+                is_yellow = (peak_z <= z_thresh) and (ch_dist < dist_thresh_px)
                 color_str = "yellow" if is_yellow else "cyan"
 
                 # Duplicate this text point across EVERY Z-slice
@@ -1163,7 +1170,7 @@ class LineageCorrectorWidget(QWidget):
 
         # Grab threshold values directly from the new UI spinboxes
         z_thresh = self.spin_z_thresh.value()
-        dist_thresh = self.spin_dist_thresh.value()
+        dist_thresh_percent = self.spin_dist_thresh.value()
 
         export_dir = self.base_folder / "analysis" / "export"
         export_dir.mkdir(parents=True, exist_ok=True)
@@ -1341,11 +1348,14 @@ class LineageCorrectorWidget(QWidget):
                         # Find the minimum distance on the heat map for each chloroplast mask
                         ch_dist = dist_map[mask_2d].min() if np.any(mask_2d) else 0.0
 
-                        # Determine color logic based on user spinbox inputs
-                        if export_selected_only:
-                            is_yellow = (peak_z <= z_thresh) and (ch_dist < dist_thresh)
-                            if is_yellow:
-                                continue  # Skip non-selected (yellow) chloroplasts
+                    # Calculate dynamic threshold for this specific cell
+                    dist_thresh_px = (dist_thresh_percent / 100.0) * cell_width_px
+
+                    # Determine color logic based on user spinbox inputs
+                    if export_selected_only:
+                        is_yellow = (peak_z <= z_thresh) and (ch_dist < dist_thresh_px)
+                        if is_yellow:
+                            continue  # Skip non-selected (yellow) chloroplasts
 
                         chloro_areas_px.append(mask_2d.sum())
                         chloro_peak_zs.append(peak_z)
