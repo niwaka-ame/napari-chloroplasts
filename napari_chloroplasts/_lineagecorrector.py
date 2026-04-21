@@ -22,7 +22,8 @@ from qtpy.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QApplication,
-    QSpinBox,  # <-- ADDED QSpinBox
+    QSpinBox,
+    QScrollArea,
 )
 
 # --- USER PROVIDED LOGIC ---
@@ -177,8 +178,27 @@ class LineageCorrectorWidget(QWidget):
         self.undo_stack = []
         self.merge_source_id = None
 
-        self.layout = QVBoxLayout()
-        self.setLayout(self.layout)
+        # --- NEW: Scroll Area Setup ---
+        # 1. Create the main layout for the dock widget
+        main_layout = QVBoxLayout()
+        self.setLayout(main_layout)
+
+        # 2. Create the Scroll Area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        # Optional: Remove the border around the scroll area to keep it looking native
+        scroll_area.setStyleSheet("QScrollArea { border: none; }")
+
+        # 3. Create a container widget to hold all your UI elements
+        container_widget = QWidget()
+
+        # 4. Bind 'self.layout' to this inner container
+        self.layout = QVBoxLayout(container_widget)
+
+        # 5. Pack everything together
+        scroll_area.setWidget(container_widget)
+        main_layout.addWidget(scroll_area)
+        # ------------------------------
 
         # Create a flag to track if the user actually used the brush
         self.mask_modified = False
