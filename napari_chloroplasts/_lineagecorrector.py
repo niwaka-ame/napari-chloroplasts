@@ -1348,14 +1348,16 @@ class LineageCorrectorWidget(QWidget):
                         # Find the minimum distance on the heat map for each chloroplast mask
                         ch_dist = dist_map[mask_2d].min() if np.any(mask_2d) else 0.0
 
-                    # Calculate dynamic threshold for this specific cell
-                    dist_thresh_px = (dist_thresh_percent / 100.0) * cell_width_px
+                        # Calculate dynamic threshold for this specific cell
+                        dist_thresh_px = (dist_thresh_percent / 100.0) * cell_width_px
 
-                    # Determine color logic based on user spinbox inputs
-                    if export_selected_only:
-                        is_yellow = (peak_z <= z_thresh) and (ch_dist < dist_thresh_px)
-                        if is_yellow:
-                            continue  # Skip non-selected (yellow) chloroplasts
+                        # Determine color logic based on user spinbox inputs
+                        if export_selected_only:
+                            is_yellow = (peak_z <= z_thresh) and (
+                                ch_dist <= dist_thresh_px
+                            )
+                            if is_yellow:
+                                continue  # Skip non-selected (yellow) chloroplasts
 
                         chloro_areas_px.append(mask_2d.sum())
                         chloro_peak_zs.append(peak_z)
