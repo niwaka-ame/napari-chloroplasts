@@ -1300,9 +1300,6 @@ class LineageCorrectorWidget(QWidget):
 
                 for cell_id in available_cells:
 
-                    # --- NEW: Reset counter to 1 for EACH cell ---
-                    cell_chlo_counter = 1
-
                     props = regionprops(
                         (full_cell_mask_to_use == cell_id).astype(np.uint8)
                     )
@@ -1336,37 +1333,55 @@ class LineageCorrectorWidget(QWidget):
                     if resolved_only and len(unrel) > 0:
                         continue
 
-                    # Filter lists based on the 'selected (cyan)' criteria if checked
-                    chloro_areas_px = []
-                    chloro_peak_zs = []
-                    chloro_dists_px = []
+                    # --- 1. Compute totals across ALL reliable chloroplasts first ---
+                    total_chloro_area_px = 0
+                    all_chloros_data = []
 
-                    for c in rel:
+                    for orig_id, c in enumerate(rel, start=1):
                         mask_2d = c["peak_mask"]
                         peak_z = c["peak_z"]
+                        area_px = mask_2d.sum()
 
                         # Find the minimum distance on the heat map for each chloroplast mask
                         ch_dist = dist_map[mask_2d].min() if np.any(mask_2d) else 0.0
 
-                        # Calculate dynamic threshold for this specific cell
-                        dist_thresh_px = (dist_thresh_percent / 100.0) * cell_width_px
+                        total_chloro_area_px += area_px
+                        all_chloros_data.append(
+                            {
+                                "orig_id": orig_id,
+                                "area_px": area_px,
+                                "peak_z": peak_z,
+                                "ch_dist": ch_dist,
+                            }
+                        )
 
-                        # Determine color logic based on user spinbox inputs
+                    # Now the cell-wide metadata reflects all valid chloroplasts!
+                    num_chlo = len(all_chloros_data)
+                    occupancy = (
+                        total_chloro_area_px / cell_area_px if cell_area_px > 0 else 0
+                    )
+
+                    # --- 2. Filter lists based on the 'selected (cyan)' criteria if checked ---
+                    chloro_areas_px = []
+                    chloro_peak_zs = []
+                    chloro_dists_px = []
+                    chloro_ids = []
+
+                    # Calculate dynamic threshold for this specific cell
+                    dist_thresh_px = (dist_thresh_percent / 100.0) * cell_width_px
+
+                    for ch_data in all_chloros_data:
                         if export_selected_only:
-                            is_yellow = (peak_z <= z_thresh) and (
-                                ch_dist <= dist_thresh_px
+                            is_yellow = (ch_data["peak_z"] <= z_thresh) and (
+                                ch_data["ch_dist"] <= dist_thresh_px
                             )
                             if is_yellow:
                                 continue  # Skip non-selected (yellow) chloroplasts
 
-                        chloro_areas_px.append(mask_2d.sum())
-                        chloro_peak_zs.append(peak_z)
-                        chloro_dists_px.append(ch_dist)
-
-                    total_chloro_area_px = sum(chloro_areas_px)
-                    occupancy = (
-                        total_chloro_area_px / cell_area_px if cell_area_px > 0 else 0
-                    )
+                        chloro_areas_px.append(ch_data["area_px"])
+                        chloro_peak_zs.append(ch_data["peak_z"])
+                        chloro_dists_px.append(ch_data["ch_dist"])
+                        chloro_ids.append(ch_data["orig_id"])
 
                     if use_microns:
                         out_c_area = cell_area_px * area_to_um2
@@ -1387,12 +1402,11 @@ class LineageCorrectorWidget(QWidget):
                     c_area_fmt = f"{out_c_area:.2f}" if use_microns else out_c_area
                     c_len_fmt = f"{out_c_len:.2f}" if use_microns else out_c_len
                     c_wid_fmt = f"{out_c_wid:.2f}" if use_microns else out_c_wid
-                    num_chlo = len(chloro_areas_px)
                     occ_fmt = f"{occupancy:.4f}"
 
                     if export_chlo_rows:
                         if len(out_ch_areas) == 0:
-                            # Handle cells with 0 chloroplasts
+                            # Handle cells with 0 chloroplasts (or 0 that passed the filter)
                             rows.append(
                                 [
                                     lif_name,
@@ -1410,9 +1424,9 @@ class LineageCorrectorWidget(QWidget):
                                 ]
                             )
                         else:
-                            # Add a separate row for each chloroplast and increment counter
-                            for ch_area, peak_z, ch_dist in zip(
-                                out_ch_areas, chloro_peak_zs, out_ch_dists
+                            # Add a separate row for each chloroplast using its ORIGINAL preserved ID
+                            for ch_id, ch_area, peak_z, ch_dist in zip(
+                                chloro_ids, out_ch_areas, chloro_peak_zs, out_ch_dists
                             ):
                                 rows.append(
                                     [
@@ -1424,13 +1438,12 @@ class LineageCorrectorWidget(QWidget):
                                         c_wid_fmt,
                                         num_chlo,
                                         occ_fmt,
-                                        cell_chlo_counter,  # Use the cell-specific counter
+                                        ch_id,  # Use the original ID mapped to this chloroplast
                                         f"{ch_area:.2f}" if use_microns else ch_area,
                                         peak_z,  # Append individual Peak Z
                                         f"{ch_dist:.2f}",  # Append formatted distance
                                     ]
                                 )
-                                cell_chlo_counter += 1
                     else:
                         # Fallback to the original semicolon-separated list
                         ch_areas_str = (
