@@ -689,7 +689,7 @@ class LineageCorrectorWidget(QWidget):
             self.process_selected_cell()
             self.global_status_lbl.setText("Reverted cell to original masks.")
 
-    def on_mode_changed(self):
+    def on_mode_changed(self, *args, **kwargs):
         if "Editable Chlo Masks" not in self.viewer.layers:
             return
         layer = self.viewer.layers["Editable Chlo Masks"]
@@ -926,12 +926,12 @@ class LineageCorrectorWidget(QWidget):
         # 2. Reset the flag
         self.mask_modified = False
 
-    def on_threshold_changed(self):
+    def on_threshold_changed(self, *args, **kwargs):
         """Safely updates the text layer colors when the threshold spin boxes are changed."""
         self.apply_edits_to_master()
         self.render_viewer()
 
-    def on_visibility_toggle(self):
+    def on_visibility_toggle(self, *args, **kwargs):
         self.apply_edits_to_master()
         self.render_viewer()
 
