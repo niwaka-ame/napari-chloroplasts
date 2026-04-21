@@ -1373,7 +1373,7 @@ class LineageCorrectorWidget(QWidget):
                     for ch_data in all_chloros_data:
                         if export_selected_only:
                             is_yellow = (ch_data["peak_z"] <= z_thresh) and (
-                                ch_data["ch_dist"] <= dist_thresh_px
+                                ch_data["ch_dist"] < dist_thresh_px
                             )
                             if is_yellow:
                                 continue  # Skip non-selected (yellow) chloroplasts
