@@ -314,14 +314,14 @@ class LineageCorrectorWidget(QWidget):
         thresh_layout = QHBoxLayout()
 
         self.spin_z_thresh = QSpinBox()
-        self.spin_z_thresh.setRange(0, 20)
-        self.spin_z_thresh.setValue(1)  # Default 1
+        self.spin_z_thresh.setRange(0, 100)
+        self.spin_z_thresh.setValue(34)  # Default 34%
 
         self.spin_dist_thresh = QSpinBox()
         self.spin_dist_thresh.setRange(0, 100)
         self.spin_dist_thresh.setValue(10)  # Default 10%
 
-        thresh_layout.addWidget(QLabel("Max Z-slice:"))
+        thresh_layout.addWidget(QLabel("Max Z-slice (%):"))
         thresh_layout.addWidget(self.spin_z_thresh)
         thresh_layout.addWidget(QLabel("Max Dist (% width):"))
         thresh_layout.addWidget(self.spin_dist_thresh)
@@ -1085,7 +1085,9 @@ class LineageCorrectorWidget(QWidget):
                 label_text = f"ID: {i}\nA: {area}\nD: {ch_dist:.2f}"
 
                 # Determine color logic based on user spinbox inputs
-                is_yellow = (peak_z <= z_thresh) and (ch_dist < dist_thresh_px)
+                # Convert 0-indexed peak_z to 1-indexed to match actual slice number
+                z_percent = ((peak_z + 1) / z_dim) * 100.0
+                is_yellow = (z_percent < z_thresh) and (ch_dist < dist_thresh_px)
                 color_str = "yellow" if is_yellow else "cyan"
 
                 # Duplicate this text point across EVERY Z-slice
@@ -1343,6 +1345,8 @@ class LineageCorrectorWidget(QWidget):
                     crop_chlo_mask = full_chlo_mask_to_use[:, rmin:rmax, cmin:cmax]
                     target_cell_bool = crop_cell_mask == cell_id
 
+                    z_dim = crop_chlo_mask.shape[0]  # Get total Z-slices for this crop
+
                     # --- NEW: Compute Distance Map to Vertical Contour ---
                     dist_map = compute_vertical_distance_map(target_cell_bool)
 
@@ -1392,7 +1396,8 @@ class LineageCorrectorWidget(QWidget):
 
                     for ch_data in all_chloros_data:
                         if export_selected_only:
-                            is_yellow = (ch_data["peak_z"] <= z_thresh) and (
+                            z_percent = ((ch_data["peak_z"] + 1) / z_dim) * 100.0
+                            is_yellow = (z_percent < z_thresh) and (
                                 ch_data["ch_dist"] < dist_thresh_px
                             )
                             if is_yellow:
