@@ -12,7 +12,6 @@ from qtpy.QtWidgets import (
     QLabel,
     QFileDialog,
     QMessageBox,
-    QLineEdit,
     QCheckBox,
     QDoubleSpinBox,
     QSpinBox,
@@ -187,12 +186,6 @@ class VeinViewerWidget(QWidget):
         # --- SEGMENTATION UI & PARAMETERS ---
         # ==========================================
         self.layout.addWidget(QLabel("--- Segmentation ---"))
-
-        out_dir_layout = QHBoxLayout()
-        out_dir_layout.addWidget(QLabel("Output Subfolder:"))
-        self.out_dir_edit = QLineEdit("analysis")
-        out_dir_layout.addWidget(self.out_dir_edit)
-        self.layout.addLayout(out_dir_layout)
 
         self.load_masks_cb = QCheckBox("Auto-load existing segmentation masks")
         self.load_masks_cb.setChecked(False)
@@ -443,15 +436,11 @@ class VeinViewerWidget(QWidget):
 
     # --- SEGMENTATION LOGIC ---
     def get_output_dir(self):
-        # --- Use the internal base_folder path ---
-        base_folder = self.base_folder
-        subfolder_name = self.out_dir_edit.text().strip()
-        if not subfolder_name:
-            subfolder_name = "analysis"
+        """Return the fixed analysis directory used by all three plugins."""
+        if self.base_folder is None:
+            raise RuntimeError("No base folder has been selected.")
 
-        # Note: If base_folder is None here (which shouldn't happen unless called prematurely),
-        # this will throw an error, so the earlier checks in methods using this are vital.
-        out_dir = base_folder / subfolder_name
+        out_dir = self.base_folder / "analysis"
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir
 
