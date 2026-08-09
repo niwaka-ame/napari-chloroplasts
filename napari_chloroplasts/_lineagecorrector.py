@@ -1421,7 +1421,11 @@ class LineageCorrectorWidget(QWidget):
                                 continue  # Skip non-selected (yellow) chloroplasts
 
                         chloro_areas_px.append(ch_data["area_px"])
-                        chloro_peak_zs.append(ch_data["peak_z"])
+
+                        # Internal Z indices are 0-based for NumPy indexing,
+                        # but exported Peak_Z values are consistently 1-based.
+                        chloro_peak_zs.append(ch_data["peak_z"] + 1)
+
                         chloro_dists_px.append(ch_data["ch_dist"])
                         chloro_ids.append(ch_data["orig_id"])
 
