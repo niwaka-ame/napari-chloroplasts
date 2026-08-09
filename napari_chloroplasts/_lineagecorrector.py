@@ -76,10 +76,19 @@ def extract_all_chloroplasts_undirected(cell_mask, chloro_stack, iom_threshold=0
 
         sub_graph = G.subgraph(cc)
         peak_node = max(cc, key=lambda node: sub_graph.nodes[node]["area"])
+
+        # Preserve every Z-specific mask belonging to this chloroplast.
+        # These are needed for 3D volume reconstruction while peak_mask remains
+        # the representative 2D mask used by the existing display/export logic.
+        slice_masks = [
+            (z, sub_graph.nodes[(z, label_id)]["mask"]) for z, label_id in sorted(cc)
+        ]
+
         reliable.append(
             {
                 "peak_z": peak_node[0],
                 "peak_mask": sub_graph.nodes[peak_node]["mask"],
+                "slice_masks": slice_masks,
             }
         )
 
@@ -370,6 +379,14 @@ class LineageCorrectorWidget(QWidget):
         self.spin_image_length_um.setValue(193.94)
         calibration_layout.addWidget(self.spin_image_length_um)
 
+        calibration_layout.addWidget(QLabel("Z spacing (µm):"))
+        self.spin_z_spacing_um = QDoubleSpinBox()
+        self.spin_z_spacing_um.setRange(0.001, 100000.0)
+        self.spin_z_spacing_um.setDecimals(4)
+        self.spin_z_spacing_um.setSingleStep(0.01)
+        self.spin_z_spacing_um.setValue(0.900)
+        calibration_layout.addWidget(self.spin_z_spacing_um)
+
         self.layout.addLayout(calibration_layout)
 
         # Export buttons
@@ -561,13 +578,9 @@ class LineageCorrectorWidget(QWidget):
         # Brightfield is channel 2. Load it when present.
         self.full_brightfield_raw = None
         if c_dim > 2:
-            self.full_brightfield_raw = np.zeros(
-                (z_dim, y_dim, x_dim), dtype=np.uint16
-            )
+            self.full_brightfield_raw = np.zeros((z_dim, y_dim, x_dim), dtype=np.uint16)
             for z in range(z_dim):
-                self.full_brightfield_raw[z, :, :] = np.array(
-                    img.get_frame(z=z, c=2)
-                )
+                self.full_brightfield_raw[z, :, :] = np.array(img.get_frame(z=z, c=2))
 
         prefix = f"{self.lif_combo.currentText()}_{self.vein_combo.currentText()}"
 
@@ -1021,9 +1034,7 @@ class LineageCorrectorWidget(QWidget):
         # Add brightfield first so it stays at the bottom of the layer stack.
         # It is available for reference but hidden by default.
         if self.full_brightfield_raw is not None:
-            crop_brightfield_raw = self.full_brightfield_raw[
-                :, rmin:rmax, cmin:cmax
-            ]
+            crop_brightfield_raw = self.full_brightfield_raw[:, rmin:rmax, cmin:cmax]
             self.viewer.add_image(
                 crop_brightfield_raw,
                 name="Brightfield (Cropped)",
@@ -1112,9 +1123,15 @@ class LineageCorrectorWidget(QWidget):
         # Calculate the distance map so we can display it dynamically
         dist_map = compute_vertical_distance_map(self.target_cell_bool)
 
-        # Grab threshold values directly from the new UI spinboxes
+        # Grab threshold values directly from the UI spinboxes
         z_thresh = self.spin_z_thresh.value()
         dist_thresh_percent = self.spin_dist_thresh.value()
+
+        # Physical calibration used for the displayed chloroplast volume.
+        # This matches the calculation used during CSV export.
+        px_to_um = self.spin_image_length_um.value() / 1024.0
+        area_to_um2 = px_to_um**2
+        z_spacing_um = self.spin_z_spacing_um.value()
 
         # Calculate the dynamic pixel threshold based on the cell's actual width
         cell_props = regionprops(self.target_cell_bool.astype(np.uint8))
@@ -1131,13 +1148,26 @@ class LineageCorrectorWidget(QWidget):
             # Find the minimum distance on the heat map for this specific mask
             ch_dist = dist_map[mask_2d].min() if np.any(mask_2d) else 0.0
 
+            # Estimate 3D chloroplast volume from all Z-specific masks, using
+            # the same sum(area_z) * Z-spacing calculation as CSV export.
+            volume_um3 = (
+                sum(z_mask.sum() for _, z_mask in chlo["slice_masks"])
+                * area_to_um2
+                * z_spacing_um
+            )
+
             # Find the centroid of the peak 2D mask to place the text
             props = regionprops(mask_2d.astype(np.uint8))
             if props:
                 y, x = props[0].centroid
 
-                # Format into three separate lines for readability
-                label_text = f"ID: {i}\nA: {area}\nD: {ch_dist:.2f}"
+                # Keep the existing quantities and add physical volume in um^3.
+                label_text = (
+                    f"ID: {i}\n"
+                    f"A: {area}\n"
+                    f"D: {ch_dist:.2f} px\n"
+                    f"V: {volume_um3:.2f} µm³"
+                )
 
                 # Determine color logic based on user spinbox inputs
                 # Convert 0-indexed peak_z to 1-indexed to match actual slice number
@@ -1291,8 +1321,11 @@ class LineageCorrectorWidget(QWidget):
                 "Occupancy",
                 "Chloroplast_ID",  # ID column
                 f"Chloroplast_Area_{'um2' if use_microns else 'px'}",
-                "Peak_Z",  # NEW: Track the Z-slice of the max area
-                f"Dist_to_Vertical_{'um' if use_microns else 'px'}",  # NEW: Distance column
+                "Peak_Z",  # 1-based Z-slice of the maximum area
+                f"Dist_to_Vertical_{'um' if use_microns else 'px'}",
+                "Chloroplast_Volume_um3",
+                "Z_Complete",
+                "Z_Edge_Status",
             ]
         else:
             headers = [
@@ -1305,8 +1338,11 @@ class LineageCorrectorWidget(QWidget):
                 "Num_Chloroplasts",
                 "Occupancy",
                 f"Chloroplast_Area(s)_{'um2' if use_microns else 'px'}",
-                "Peak_Z(s)",  # NEW: Track the Z-slices in a list
-                f"Dist(s)_to_Vertical_{'um' if use_microns else 'px'}",  # NEW: Distance list
+                "Peak_Z(s)",  # 1-based Z-slices
+                f"Dist(s)_to_Vertical_{'um' if use_microns else 'px'}",
+                "Chloroplast_Volume(s)_um3",
+                "Z_Complete(s)",
+                "Z_Edge_Status(s)",
             ]
 
         rows.append(headers)
@@ -1321,6 +1357,7 @@ class LineageCorrectorWidget(QWidget):
         image_length_um = self.spin_image_length_um.value()
         px_to_um = image_length_um / 1024.0
         area_to_um2 = px_to_um**2
+        z_spacing_um = self.spin_z_spacing_um.value()
 
         for lif_name in lif_names:
             lif_path = self.lif_files[lif_name]
@@ -1427,6 +1464,32 @@ class LineageCorrectorWidget(QWidget):
                         # Find the minimum distance on the heat map for each chloroplast mask
                         ch_dist = dist_map[mask_2d].min() if np.any(mask_2d) else 0.0
 
+                        # Chloro-Count-style 3D volume reconstruction:
+                        # sum(cross-sectional area at each occupied Z) * Z spacing.
+                        #
+                        # area_to_um2 converts segmented pixels to physical area;
+                        # z_spacing_um is the distance between adjacent Z planes.
+                        slice_masks = c["slice_masks"]
+                        volume_um3 = (
+                            sum(z_mask.sum() for _, z_mask in slice_masks)
+                            * area_to_um2
+                            * z_spacing_um
+                        )
+
+                        occupied_z = [z for z, _ in slice_masks]
+                        touches_first = min(occupied_z) == 0
+                        touches_last = max(occupied_z) == (z_dim - 1)
+                        z_complete = not (touches_first or touches_last)
+
+                        if touches_first and touches_last:
+                            z_edge_status = "both"
+                        elif touches_first:
+                            z_edge_status = "first"
+                        elif touches_last:
+                            z_edge_status = "last"
+                        else:
+                            z_edge_status = "complete"
+
                         total_chloro_area_px += area_px
                         all_chloros_data.append(
                             {
@@ -1434,6 +1497,9 @@ class LineageCorrectorWidget(QWidget):
                                 "area_px": area_px,
                                 "peak_z": peak_z,
                                 "ch_dist": ch_dist,
+                                "volume_um3": volume_um3,
+                                "z_complete": z_complete,
+                                "z_edge_status": z_edge_status,
                             }
                         )
 
@@ -1448,6 +1514,9 @@ class LineageCorrectorWidget(QWidget):
                     chloro_peak_zs = []
                     chloro_dists_px = []
                     chloro_ids = []
+                    chloro_volumes_um3 = []
+                    chloro_z_complete = []
+                    chloro_z_edge_status = []
 
                     # Calculate dynamic threshold for this specific cell
                     dist_thresh_px = (dist_thresh_percent / 100.0) * cell_width_px
@@ -1469,6 +1538,9 @@ class LineageCorrectorWidget(QWidget):
 
                         chloro_dists_px.append(ch_data["ch_dist"])
                         chloro_ids.append(ch_data["orig_id"])
+                        chloro_volumes_um3.append(ch_data["volume_um3"])
+                        chloro_z_complete.append(ch_data["z_complete"])
+                        chloro_z_edge_status.append(ch_data["z_edge_status"])
 
                     if use_microns:
                         out_c_area = cell_area_px * area_to_um2
@@ -1508,12 +1580,29 @@ class LineageCorrectorWidget(QWidget):
                                     "",  # Blank Chlo Area
                                     "",  # Blank Peak Z
                                     "",  # Blank Dist
+                                    "",  # Blank Volume
+                                    "",  # Blank Z completeness
+                                    "",  # Blank Z edge status
                                 ]
                             )
                         else:
                             # Add a separate row for each chloroplast using its ORIGINAL preserved ID
-                            for ch_id, ch_area, peak_z, ch_dist in zip(
-                                chloro_ids, out_ch_areas, chloro_peak_zs, out_ch_dists
+                            for (
+                                ch_id,
+                                ch_area,
+                                peak_z,
+                                ch_dist,
+                                ch_volume,
+                                ch_complete,
+                                ch_edge_status,
+                            ) in zip(
+                                chloro_ids,
+                                out_ch_areas,
+                                chloro_peak_zs,
+                                out_ch_dists,
+                                chloro_volumes_um3,
+                                chloro_z_complete,
+                                chloro_z_edge_status,
                             ):
                                 rows.append(
                                     [
@@ -1525,10 +1614,13 @@ class LineageCorrectorWidget(QWidget):
                                         c_wid_fmt,
                                         num_chlo,
                                         occ_fmt,
-                                        ch_id,  # Use the original ID mapped to this chloroplast
+                                        ch_id,
                                         f"{ch_area:.2f}" if use_microns else ch_area,
-                                        peak_z,  # Append individual Peak Z
-                                        f"{ch_dist:.2f}",  # Append formatted distance
+                                        peak_z,
+                                        f"{ch_dist:.2f}",
+                                        f"{ch_volume:.2f}",
+                                        ch_complete,
+                                        ch_edge_status,
                                     ]
                                 )
                     else:
@@ -1541,9 +1633,10 @@ class LineageCorrectorWidget(QWidget):
                         peak_zs_str = ";".join(
                             [str(z) for z in chloro_peak_zs]
                         )  # Create semicolon string for Zs
-                        dists_str = ";".join(
-                            [f"{d:.2f}" for d in out_ch_dists]
-                        )  # Create semicolon string for dists
+                        dists_str = ";".join([f"{d:.2f}" for d in out_ch_dists])
+                        volumes_str = ";".join([f"{v:.2f}" for v in chloro_volumes_um3])
+                        z_complete_str = ";".join([str(v) for v in chloro_z_complete])
+                        z_edge_status_str = ";".join(chloro_z_edge_status)
 
                         rows.append(
                             [
@@ -1556,8 +1649,11 @@ class LineageCorrectorWidget(QWidget):
                                 num_chlo,
                                 occ_fmt,
                                 ch_areas_str,
-                                peak_zs_str,  # Append list of Peak Zs
-                                dists_str,  # Append list of distances
+                                peak_zs_str,
+                                dists_str,
+                                volumes_str,
+                                z_complete_str,
+                                z_edge_status_str,
                             ]
                         )
 
