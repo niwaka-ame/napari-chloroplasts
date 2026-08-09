@@ -4,6 +4,7 @@ import tifffile
 from pathlib import Path
 from readlif.reader import LifFile
 from skimage.morphology import flood
+from skimage.measure import regionprops
 from qtpy.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -90,6 +91,12 @@ class CellSelectorWidget(QWidget):
         action_layout.addWidget(self.undo_btn)
         self.layout.addLayout(action_layout)
 
+        self.revert_cells_btn = QPushButton("⏪ Revert All Cell Edits")
+        self.revert_cells_btn.setStyleSheet(
+            "background-color: #d9534f; color: white;"
+        )
+        self.layout.addWidget(self.revert_cells_btn)
+
         self.save_btn = QPushButton("💾 Save Cell Masks")
         self.layout.addWidget(self.save_btn)
 
@@ -112,6 +119,7 @@ class CellSelectorWidget(QWidget):
 
         self.add_cell_btn.clicked.connect(self.commit_preview)
         self.undo_btn.clicked.connect(self.undo_last_cell)
+        self.revert_cells_btn.clicked.connect(self.revert_all_cell_edits)
         self.save_btn.clicked.connect(self.save_cells)
 
         # --- View Events ---
@@ -248,7 +256,42 @@ class CellSelectorWidget(QWidget):
 
         # 3. Setup Cell Layers
         empty_mask = np.zeros((z_dim, y_dim, x_dim), dtype=np.uint16)
-        self.viewer.add_labels(empty_mask.copy(), name="Cells Mask", opacity=0.6)
+
+        # Reload previously saved 2D cell selections, if available.
+        #
+        # Cells are stored on disk as a 2D labelled image.  The interactive
+        # editor represents each selected cell across every Z-slice, so expand
+        # the saved 2D mask back to (Z, Y, X) when reopening a vein.
+        cell_path = self.base_folder / "analysis" / "cells" / f"{prefix}_cells.tif"
+        if cell_path.exists():
+            saved_cells_2d = tifffile.imread(cell_path)
+
+            if saved_cells_2d.ndim != 2:
+                QMessageBox.warning(
+                    self,
+                    "Invalid Cell Mask",
+                    f"Expected a 2D saved cell mask, but found shape "
+                    f"{saved_cells_2d.shape}. Starting with an empty cell mask.",
+                )
+                cells_mask_3d = empty_mask.copy()
+            elif saved_cells_2d.shape != (y_dim, x_dim):
+                QMessageBox.warning(
+                    self,
+                    "Cell Mask Size Mismatch",
+                    f"Saved cell mask has shape {saved_cells_2d.shape}, but the "
+                    f"current image is {(y_dim, x_dim)}. Starting with an empty "
+                    "cell mask.",
+                )
+                cells_mask_3d = empty_mask.copy()
+            else:
+                cells_mask_3d = np.broadcast_to(
+                    saved_cells_2d.astype(np.uint16, copy=False),
+                    (z_dim, y_dim, x_dim),
+                ).copy()
+        else:
+            cells_mask_3d = empty_mask.copy()
+
+        self.viewer.add_labels(cells_mask_3d, name="Cells Mask", opacity=0.6)
 
         preview_layer = self.viewer.add_labels(
             empty_mask.copy(), name="Preview", opacity=0.5
@@ -256,7 +299,115 @@ class CellSelectorWidget(QWidget):
         preview_layer.color_mode = "direct"
         preview_layer.color = {1: "red"}
 
+        # Keep cell numbers visible above the masks while browsing Z.
+        self.refresh_cell_id_labels()
+
         self.viewer.reset_view()
+
+    def load_saved_cells_into_layer(self):
+        """Reload the saved 2D cell mask into the current 3D Cells Mask layer."""
+        if (
+            self.base_folder is None
+            or "Cells Mask" not in self.viewer.layers
+            or not self.lif_combo.currentText()
+            or not self.vein_combo.currentText()
+        ):
+            return False
+
+        cells_layer = self.viewer.layers["Cells Mask"]
+        if cells_layer.data.ndim != 3:
+            return False
+
+        z_dim, y_dim, x_dim = cells_layer.data.shape
+        prefix = f"{self.lif_combo.currentText()}_{self.vein_combo.currentText()}"
+        cell_path = self.base_folder / "analysis" / "cells" / f"{prefix}_cells.tif"
+
+        if not cell_path.exists():
+            QMessageBox.warning(
+                self,
+                "No Saved Cell Mask",
+                "No previously saved cell mask exists for this vein.",
+            )
+            return False
+
+        saved_cells_2d = tifffile.imread(cell_path)
+
+        if saved_cells_2d.ndim != 2:
+            QMessageBox.warning(
+                self,
+                "Invalid Cell Mask",
+                f"Expected a 2D saved cell mask, but found shape "
+                f"{saved_cells_2d.shape}.",
+            )
+            return False
+
+        if saved_cells_2d.shape != (y_dim, x_dim):
+            QMessageBox.warning(
+                self,
+                "Cell Mask Size Mismatch",
+                f"Saved cell mask has shape {saved_cells_2d.shape}, but the "
+                f"current image is {(y_dim, x_dim)}.",
+            )
+            return False
+
+        cells_layer.data = np.broadcast_to(
+            saved_cells_2d.astype(np.uint16, copy=False),
+            (z_dim, y_dim, x_dim),
+        ).copy()
+        cells_layer.refresh()
+
+        return True
+
+    def refresh_cell_id_labels(self):
+        """Create/update a top text layer showing the numeric ID of each cell."""
+        layer_name = "Cell IDs"
+
+        if layer_name in self.viewer.layers:
+            self.viewer.layers.remove(layer_name)
+
+        if "Cells Mask" not in self.viewer.layers:
+            return
+
+        cells_data = self.viewer.layers["Cells Mask"].data
+        if cells_data.ndim != 3 or cells_data.shape[0] == 0:
+            return
+
+        # Every selected cell is repeated across Z, so one slice is sufficient
+        # for finding the 2D cell shapes and their centroids.
+        cells_2d = cells_data[0]
+
+        coords = []
+        labels = []
+        z_dim = cells_data.shape[0]
+
+        for region in regionprops(cells_2d.astype(np.int32, copy=False)):
+            y, x = region.centroid
+            label_text = str(region.label)
+
+            # Duplicate the text point through Z so the ID remains visible while
+            # scrolling through the stack.
+            for z in range(z_dim):
+                coords.append([z, y, x])
+                labels.append(label_text)
+
+        if not coords:
+            return
+
+        text_kwargs = {
+            "string": "{cell_id}",
+            "color": "white",
+            "size": 12,
+            "anchor": "center",
+        }
+
+        self.viewer.add_points(
+            np.asarray(coords, dtype=float),
+            properties={"cell_id": labels},
+            text=text_kwargs,
+            size=0,
+            name=layer_name,
+            visible=True,
+        )
 
     # --- INTERACTION LOGIC ---
     def toggle_drawing_mode(self):
@@ -306,6 +457,7 @@ class CellSelectorWidget(QWidget):
                 cells_layer.refresh()
                 if cell_val in self.cell_history:
                     self.cell_history.remove(cell_val)
+                self.refresh_cell_id_labels()
                 return
 
             # 3. Otherwise, if empty space, generate preview
@@ -348,6 +500,7 @@ class CellSelectorWidget(QWidget):
         cells_layer.refresh()
 
         self.cell_history.append(new_id)
+        self.refresh_cell_id_labels()
 
         # Clear preview
         preview_layer.data.fill(0)
@@ -362,6 +515,36 @@ class CellSelectorWidget(QWidget):
 
         cells_layer.data[cells_layer.data == last_id] = 0
         cells_layer.refresh()
+        self.refresh_cell_id_labels()
+
+    def revert_all_cell_edits(self):
+        """Discard current cell-selection edits and restore the last saved mask."""
+        if "Cells Mask" not in self.viewer.layers:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Revert Cell Edits",
+            "Are you sure you want to discard all cell-selection edits made "
+            "since the last save?\n\nEditable wall changes will be kept.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        if not self.load_saved_cells_into_layer():
+            return
+
+        # A reverted state should not retain an old preview or an undo history
+        # referring to selections that no longer exist.
+        if "Preview" in self.viewer.layers:
+            preview_layer = self.viewer.layers["Preview"]
+            preview_layer.data.fill(0)
+            preview_layer.refresh()
+
+        self.cell_history.clear()
+        self.refresh_cell_id_labels()
 
     def save_cells(self):
         if "Cells Mask" not in self.viewer.layers:
