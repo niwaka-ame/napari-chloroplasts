@@ -23,6 +23,7 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QApplication,
     QSpinBox,
+    QDoubleSpinBox,
     QScrollArea,
 )
 
@@ -356,6 +357,19 @@ class LineageCorrectorWidget(QWidget):
         export_opt_layout2.addWidget(self.chk_export_chlo_rows)
         export_opt_layout2.addWidget(self.chk_export_selected)
         self.layout.addLayout(export_opt_layout2)
+
+        # Physical calibration: image length represented by 1024 pixels.
+        calibration_layout = QHBoxLayout()
+        calibration_layout.addWidget(QLabel("Length (µm / 1024 px):"))
+
+        self.spin_image_length_um = QDoubleSpinBox()
+        self.spin_image_length_um.setRange(0.001, 100000.0)
+        self.spin_image_length_um.setDecimals(3)
+        self.spin_image_length_um.setSingleStep(1.0)
+        self.spin_image_length_um.setValue(193.94)
+        calibration_layout.addWidget(self.spin_image_length_um)
+
+        self.layout.addLayout(calibration_layout)
 
         # Export buttons
         export_btn_layout = QHBoxLayout()
@@ -1261,7 +1275,10 @@ class LineageCorrectorWidget(QWidget):
         )
         QApplication.processEvents()  # Force UI to update before long computation
 
-        px_to_um = 193.94 / 1024.0
+        # All images are 1024 x 1024.  The user specifies the physical
+        # length represented by 1024 pixels for the current dataset.
+        image_length_um = self.spin_image_length_um.value()
+        px_to_um = image_length_um / 1024.0
         area_to_um2 = px_to_um**2
 
         for lif_name in lif_names:
