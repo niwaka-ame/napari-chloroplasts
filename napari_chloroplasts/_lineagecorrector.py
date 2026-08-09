@@ -156,6 +156,7 @@ class LineageCorrectorWidget(QWidget):
 
         # State Data
         self.full_chlo_raw = None
+        self.full_brightfield_raw = None
         self.full_chlo_mask = None
         self.full_cell_mask = None
         self.available_cells = []
@@ -535,11 +536,38 @@ class LineageCorrectorWidget(QWidget):
 
         img = self.current_lif.get_image(scene_idx)
         z_dim, c_dim, y_dim, x_dim = img.dims.z, img.channels, img.dims.y, img.dims.x
-        chlo_idx = 1 if c_dim > 1 else 0
+
+        # Channel convention used throughout this workflow:
+        #   C0 = cell wall
+        #   C1 = chloroplast
+        #   C2 = brightfield
+        #
+        # Chloroplast is always available, so do not fall back to C0.
+        if c_dim <= 1:
+            QMessageBox.warning(
+                self,
+                "Missing Chloroplast Channel",
+                f"Expected chloroplast data in channel 1, but this image has "
+                f"only {c_dim} channel(s).",
+            )
+            self.full_chlo_raw = None
+            self.full_brightfield_raw = None
+            return
 
         self.full_chlo_raw = np.zeros((z_dim, y_dim, x_dim), dtype=np.uint16)
         for z in range(z_dim):
-            self.full_chlo_raw[z, :, :] = np.array(img.get_frame(z=z, c=chlo_idx))
+            self.full_chlo_raw[z, :, :] = np.array(img.get_frame(z=z, c=1))
+
+        # Brightfield is channel 2. Load it when present.
+        self.full_brightfield_raw = None
+        if c_dim > 2:
+            self.full_brightfield_raw = np.zeros(
+                (z_dim, y_dim, x_dim), dtype=np.uint16
+            )
+            for z in range(z_dim):
+                self.full_brightfield_raw[z, :, :] = np.array(
+                    img.get_frame(z=z, c=2)
+                )
 
         prefix = f"{self.lif_combo.currentText()}_{self.vein_combo.currentText()}"
 
@@ -989,6 +1017,19 @@ class LineageCorrectorWidget(QWidget):
         self.viewer.layers.clear()
         rmin, rmax, cmin, cmax = self.current_crop_bounds
         crop_chlo_raw = self.full_chlo_raw[:, rmin:rmax, cmin:cmax]
+
+        # Add brightfield first so it stays at the bottom of the layer stack.
+        # It is available for reference but hidden by default.
+        if self.full_brightfield_raw is not None:
+            crop_brightfield_raw = self.full_brightfield_raw[
+                :, rmin:rmax, cmin:cmax
+            ]
+            self.viewer.add_image(
+                crop_brightfield_raw,
+                name="Brightfield (Cropped)",
+                colormap="gray",
+                visible=False,
+            )
 
         self.viewer.add_image(
             crop_chlo_raw,
