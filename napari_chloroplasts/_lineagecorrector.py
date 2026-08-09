@@ -23,11 +23,35 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QApplication,
     QSpinBox,
-    QDoubleSpinBox,
     QScrollArea,
 )
 
 # --- USER PROVIDED LOGIC ---
+
+
+def get_voxel_sizes_um(lif_image):
+    """
+    Return physical voxel sizes (x_um_per_px, y_um_per_px, z_um_per_slice)
+    from a readlif LifImage.
+
+    readlif exposes spatial scale as pixels per micrometre. Leica metadata
+    can encode a reversed acquisition axis with a negative Length, so use the
+    absolute scale magnitude before taking the reciprocal.
+    """
+    try:
+        scale_x, scale_y, scale_z, _ = lif_image.scale
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("LIF image does not contain usable spatial scale metadata.") from exc
+
+    scales = {"X": scale_x, "Y": scale_y, "Z": scale_z}
+    voxel_sizes = {}
+
+    for axis, scale in scales.items():
+        if scale is None or not np.isfinite(scale) or scale == 0:
+            raise ValueError(f"LIF image has invalid {axis} scale metadata: {scale}")
+        voxel_sizes[axis] = 1.0 / abs(float(scale))
+
+    return voxel_sizes["X"], voxel_sizes["Y"], voxel_sizes["Z"]
 
 
 def calculate_iom(mask_a, mask_b):
@@ -166,6 +190,13 @@ class LineageCorrectorWidget(QWidget):
         # State Data
         self.full_chlo_raw = None
         self.full_brightfield_raw = None
+
+        # Physical voxel calibration for the currently loaded vein.
+        # Values are read automatically from the LIF metadata.
+        self.current_x_um_per_px = None
+        self.current_y_um_per_px = None
+        self.current_z_um_per_slice = None
+
         self.full_chlo_mask = None
         self.full_cell_mask = None
         self.available_cells = []
@@ -368,26 +399,10 @@ class LineageCorrectorWidget(QWidget):
         export_opt_layout2.addWidget(self.chk_export_selected)
         self.layout.addLayout(export_opt_layout2)
 
-        # Physical calibration: image length represented by 1024 pixels.
-        calibration_layout = QHBoxLayout()
-        calibration_layout.addWidget(QLabel("Length (µm / 1024 px):"))
-
-        self.spin_image_length_um = QDoubleSpinBox()
-        self.spin_image_length_um.setRange(0.001, 100000.0)
-        self.spin_image_length_um.setDecimals(3)
-        self.spin_image_length_um.setSingleStep(1.0)
-        self.spin_image_length_um.setValue(193.94)
-        calibration_layout.addWidget(self.spin_image_length_um)
-
-        calibration_layout.addWidget(QLabel("Z spacing (µm):"))
-        self.spin_z_spacing_um = QDoubleSpinBox()
-        self.spin_z_spacing_um.setRange(0.001, 100000.0)
-        self.spin_z_spacing_um.setDecimals(4)
-        self.spin_z_spacing_um.setSingleStep(0.01)
-        self.spin_z_spacing_um.setValue(0.900)
-        calibration_layout.addWidget(self.spin_z_spacing_um)
-
-        self.layout.addLayout(calibration_layout)
+        # Physical calibration is read automatically from the selected LIF image.
+        self.calibration_lbl = QLabel("Voxel size: not loaded")
+        self.calibration_lbl.setStyleSheet("color: gray;")
+        self.layout.addWidget(self.calibration_lbl)
 
         # Export buttons
         export_btn_layout = QHBoxLayout()
@@ -553,6 +568,33 @@ class LineageCorrectorWidget(QWidget):
 
         img = self.current_lif.get_image(scene_idx)
         z_dim, c_dim, y_dim, x_dim = img.dims.z, img.channels, img.dims.y, img.dims.x
+
+        # Read physical voxel calibration directly from this image's LIF metadata.
+        try:
+            (
+                self.current_x_um_per_px,
+                self.current_y_um_per_px,
+                self.current_z_um_per_slice,
+            ) = get_voxel_sizes_um(img)
+
+            self.calibration_lbl.setText(
+                "Voxel size: "
+                f"X {self.current_x_um_per_px:.4f} µm/px | "
+                f"Y {self.current_y_um_per_px:.4f} µm/px | "
+                f"Z {self.current_z_um_per_slice:.4f} µm/slice"
+            )
+            self.calibration_lbl.setStyleSheet("")
+        except ValueError as exc:
+            self.current_x_um_per_px = None
+            self.current_y_um_per_px = None
+            self.current_z_um_per_slice = None
+            self.calibration_lbl.setText("Voxel size: unavailable")
+            self.calibration_lbl.setStyleSheet("color: red;")
+            QMessageBox.warning(
+                self,
+                "Missing Calibration",
+                f"Could not read spatial calibration from this LIF image:\n{exc}",
+            )
 
         # Channel convention used throughout this workflow:
         #   C0 = cell wall
@@ -1128,10 +1170,18 @@ class LineageCorrectorWidget(QWidget):
         dist_thresh_percent = self.spin_dist_thresh.value()
 
         # Physical calibration used for the displayed chloroplast volume.
-        # This matches the calculation used during CSV export.
-        px_to_um = self.spin_image_length_um.value() / 1024.0
-        area_to_um2 = px_to_um**2
-        z_spacing_um = self.spin_z_spacing_um.value()
+        # These values come directly from the currently selected LIF image.
+        calibration_available = all(
+            value is not None
+            for value in (
+                self.current_x_um_per_px,
+                self.current_y_um_per_px,
+                self.current_z_um_per_slice,
+            )
+        )
+        if calibration_available:
+            area_to_um2 = self.current_x_um_per_px * self.current_y_um_per_px
+            z_spacing_um = self.current_z_um_per_slice
 
         # Calculate the dynamic pixel threshold based on the cell's actual width
         cell_props = regionprops(self.target_cell_bool.astype(np.uint8))
@@ -1150,11 +1200,15 @@ class LineageCorrectorWidget(QWidget):
 
             # Estimate 3D chloroplast volume from all Z-specific masks, using
             # the same sum(area_z) * Z-spacing calculation as CSV export.
-            volume_um3 = (
-                sum(z_mask.sum() for _, z_mask in chlo["slice_masks"])
-                * area_to_um2
-                * z_spacing_um
-            )
+            if calibration_available:
+                volume_um3 = (
+                    sum(z_mask.sum() for _, z_mask in chlo["slice_masks"])
+                    * area_to_um2
+                    * z_spacing_um
+                )
+                volume_text = f"{volume_um3:.2f} µm³"
+            else:
+                volume_text = "n/a"
 
             # Find the centroid of the peak 2D mask to place the text
             props = regionprops(mask_2d.astype(np.uint8))
@@ -1166,7 +1220,7 @@ class LineageCorrectorWidget(QWidget):
                     f"ID: {i}\n"
                     f"A: {area}\n"
                     f"D: {ch_dist:.2f} px\n"
-                    f"V: {volume_um3:.2f} µm³"
+                    f"V: {volume_text}"
                 )
 
                 # Determine color logic based on user spinbox inputs
@@ -1352,13 +1406,6 @@ class LineageCorrectorWidget(QWidget):
         )
         QApplication.processEvents()  # Force UI to update before long computation
 
-        # All images are 1024 x 1024.  The user specifies the physical
-        # length represented by 1024 pixels for the current dataset.
-        image_length_um = self.spin_image_length_um.value()
-        px_to_um = image_length_um / 1024.0
-        area_to_um2 = px_to_um**2
-        z_spacing_um = self.spin_z_spacing_um.value()
-
         for lif_name in lif_names:
             lif_path = self.lif_files[lif_name]
             lif_obj = LifFile(lif_path)
@@ -1373,6 +1420,20 @@ class LineageCorrectorWidget(QWidget):
 
                 vein_name = img.name
                 prefix = f"{lif_name}_{vein_name}"
+
+                # Calibration can vary between images in the same LIF, so always
+                # read it from the image currently being exported.
+                try:
+                    x_um_per_px, y_um_per_px, z_spacing_um = get_voxel_sizes_um(img)
+                except ValueError as exc:
+                    QMessageBox.warning(
+                        self,
+                        "Missing Calibration",
+                        f"Skipping {lif_name} / {vein_name}:\n{exc}",
+                    )
+                    continue
+
+                area_to_um2 = x_um_per_px * y_um_per_px
 
                 is_active_vein = (
                     lif_name == self.lif_combo.currentText()
@@ -1544,12 +1605,18 @@ class LineageCorrectorWidget(QWidget):
 
                     if use_microns:
                         out_c_area = cell_area_px * area_to_um2
-                        out_c_len = cell_length_px * px_to_um
-                        out_c_wid = cell_width_px * px_to_um
+
+                        # Bounding-box rows correspond to Y and columns to X.
+                        out_c_len = cell_length_px * y_um_per_px
+                        out_c_wid = cell_width_px * x_um_per_px
+
                         out_ch_areas = [a * area_to_um2 for a in chloro_areas_px]
+
+                        # Distance to the classified vertical cell boundary is
+                        # primarily a horizontal (X-axis) distance.
                         out_ch_dists = [
-                            d * px_to_um for d in chloro_dists_px
-                        ]  # Convert distances
+                            d * x_um_per_px for d in chloro_dists_px
+                        ]
                     else:
                         out_c_area = cell_area_px
                         out_c_len = cell_length_px
