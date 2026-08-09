@@ -316,7 +316,7 @@ class LineageCorrectorWidget(QWidget):
 
         self.spin_z_thresh = QSpinBox()
         self.spin_z_thresh.setRange(0, 100)
-        self.spin_z_thresh.setValue(34)  # Default 34%
+        self.spin_z_thresh.setValue(50)  # Default 50%
 
         self.spin_dist_thresh = QSpinBox()
         self.spin_dist_thresh.setRange(0, 100)
